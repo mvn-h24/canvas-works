@@ -1,23 +1,25 @@
+import type { CSSProperties, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { type CanvasCtx, Ctx, type Drawer, type Ticker } from './context';
+import type { CanvasCtx, Drawer, Ticker } from './context';
+import { Ctx } from './context';
 
 export interface CanvasProviderProps {
   width: number;
   height: number;
   background?: string; // цвет фона, заполняется КАЖДЫЙ кадр (opaque)
   className?: string;
-  style?: React.CSSProperties;
+  style?: CSSProperties;
   contextAttributes?: CanvasRenderingContext2DSettings;
-  children?: React.ReactNode;
+  children?: ReactNode;
 }
 
 export function CanvasProvider({
   width,
   height,
-  background = '#fff',
+  background,
   className,
   style,
-  contextAttributes = { alpha: false, desynchronized: true },
+  contextAttributes,
   children,
 }: CanvasProviderProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -67,7 +69,7 @@ export function CanvasProvider({
 
       const ctx = canvas.getContext(
         '2d',
-        contextAttributes
+        contextAttributes ?? { alpha: false, desynchronized: true }
       ) as CanvasRenderingContext2D | null;
       if (!ctx) return;
 
@@ -89,7 +91,7 @@ export function CanvasProvider({
         lastTsRef.current = ts;
 
         // CLEAR + BACKGROUND (в логических пикселях, т.к. трансформ уже масштабирует)
-        ctx2d.fillStyle = background;
+        ctx2d.fillStyle = background ?? '#fff';
         ctx2d.fillRect(0, 0, width, height);
 
         // UPDATE → DRAW
