@@ -8,6 +8,9 @@
     },
     {
       "path": "./apps/test-app"
+    },
+    {
+      "path": "./libs/canvas-works"
     }
   ]
 }
