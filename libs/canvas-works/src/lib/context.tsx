@@ -1,48 +1,53 @@
 import { createContext, useContext } from 'react';
+import type { Matrix } from './matrix';
 
-/** Функция рисования, вызываемая для данного слоя */
+/** Функция рисования слоя */
 export type Drawer = (ctx: CanvasRenderingContext2D, now: number) => void;
-
-/** Вызывается перед отрисовкой. Если верно, оно изменило состояние и требует перерисовки. */
+/** Вызывается перед отрисовкой. Если вернуло true — требуется перерисовка */
 export type Ticker = (dt: number, now: number) => boolean;
 
-/** 2D matrix (DOMMatrix-free) */
-export type Matrix = { a: number; b: number; c: number; d: number; e: number; f: number };
-
 export type CanvasApi = {
-  /** HTML canvas element and its 2d context (may be null just after mount) */
+  /** HTML canvas и его контекст (может быть null сразу после mount) */
   canvas: HTMLCanvasElement | null;
   ctx: CanvasRenderingContext2D | null;
 
-  /** Device-pixel ratio used for backing store scaling */
+  /** Текущий DPR (devicePixelRatio) */
   dpr: number;
 
-  /** CSS pixel size of the canvas */
+  /** CSS‑размеры канваса */
   size: { w: number; h: number };
 
-  /** World transform applied on top of DPR (CSS px units) */
+  /** Мировая матрица (CSS px → CSS px), применяемая поверх DPR */
   world: Matrix;
-
-  /** Update world transform (set or updater fn) */
+  /** Установить world (значение или updater) */
   setWorld: (world: Matrix | ((w: Matrix) => Matrix)) => void;
 
-  /** Convert a CSS-pixel point to device pixels (screen) and vice versa */
+  /** Конвертация точек */
   toScreen: (pt: { x: number; y: number }) => { x: number; y: number };
   toWorld: (pt: { x: number; y: number }) => { x: number; y: number };
 
-  /** Register a drawing layer. Returns cleanup */
+  /** Регистрация слоя */
   registerLayer: (opts: {
     draw: Drawer;
     z?: number;
     visible?: boolean;
-    /** Whether the layer is drawn in world space (default) or screen space (ignores world transform). */
+    /** world — по умолчанию; screen — игнорирует world и использует только DPR */
     space?: 'world' | 'screen';
   }) => () => void;
 
-  /** Register a ticker (animation/update). Returns cleanup function. */
+  /** Регистрация тикера */
   registerTicker: (fn: Ticker) => () => void;
 
-  /** Mark canvas as dirty and schedule redraw on next frame */
+  /** Панорамирование в экранных координатах (CSS px) */
+  panByScreen: (dx: number, dy: number) => void;
+
+  /** Зум под точкой экрана (CSS px). k>1 — увеличение */
+  zoomAtScreen: (cx: number, cy: number, k: number) => void;
+
+  /** Сброс вида к I */
+  resetView: () => void;
+
+  /** Отметить как «грязный» и гарантированно запустить ближайший rAF */
   scheduleRedraw: () => void;
 };
 
