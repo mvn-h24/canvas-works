@@ -1,109 +1,93 @@
+'use client';
 import { useEffect } from 'react';
 import { useCanvas } from './context';
 
-/** Grid — компонент-сетка, рисуется КАЖДЫЙ кадр поверх фона */
-export type GridProps = {
+/** Grid — компонент-сетка, рисуется каждый кадр поверх фона (screen-space), с учётом DPR */
+interface GridProps {
   step?: number;
   strokeStyle?: string;
-  lineWidth?: number; // в CSS-пикселях
-};
+  lineWidth?: number;
+  z?: number;
+  visible?: boolean;
+}
 
-/**
- * createSnap
- * ----------
- * Фабрика, помогающая рисовать _чёткие_ (неразмытые) линии на Canvas при любом DPR.
+/** Возвращает реальную толщину линии (lw) в CSS px и функцию snap(v) для выравнивания координат к физическим пикселям.
  *
- * Проблема:
- *  - В Canvas координаты задаются в CSS-пикселях, а физические пиксели устройства (device pixels) — дробные.
- *  - Если центр штриха (`stroke`) не попадает ровно на «сетку» физических пикселей, браузер растеризует линию между пикселями → полупрозрачный «размаз».
- *
- * Решение:
- *  - Привести желаемую толщину к _целому числу физических пикселей_.
- *  - Снэпнуть (выравнять) координату линии так, чтобы центр штриха пришёлся _строго по центру_ device-пикселя(ей).
- *
- * Алгоритм:
- *  1) devicePx = max(1, round(lineWidth * dpr))
- *     — требуемая толщина в ФИЗИЧЕСКИХ пикселях, целое число.
- *  2) lw = devicePx / dpr
- *     — реальная толщина в CSS-пикселях для `ctx.lineWidth`.
- *  3) half = (devicePx % 2 === 1) ? (0.5 / dpr) : 0
- *     — смещение центра штриха:
- *       • для НЕЧЁТНОЙ толщины (1, 3, 5 физ. px) центр должен попасть в середину пикселя → +0.5/devicePx в CSS-пикселях;
- *       • для ЧЁТНОЙ толщины (2, 4, 6 физ. px) центр должен лечь на границу между пикселями → смещение не нужно.
- *  4) snap(v) = round(v * dpr) / dpr + half
- *     — выравнивает координату `v` (в CSS-пикселях) к ближайшей «сетке» device-пикселей с учётом нужного смещения.
- *  @param {number} lineWidth - желаемая толщина линии в CSS-пикселях.
- *  @param {number} dpr       - devicePixelRatio, из canvas-контекста
- *  @returns {{ lw: number; snap: (v: number) => number }}
- *    - lw — толщина для `ctx.lineWidth` (в CSS-пикселях), соответствующая целому числу физ. пикселей.
- *    - snap — функция выравнивания координат для построения «острых» линий.
- *
- * Рекомендации:
- *  - Применяйте `snap()` к координатам ЦЕНТРА штриха (X для вертикалей, Y для горизонталей).
- *  - Стройте общий path и вызывайте один `stroke()` для производительности.
- *  - Если у вас есть трансформации (`ctx.setTransform(scale, ...)`), правило остаётся тем же:
- *    работайте в «мировых» (CSS) координатах и подавайте в `snap` именно их.
- *
- * Потенциальные ошибки:
- *  - Задать `ctx.lineCap='round'`/`'square'` и удивляться, что визуальная толщина «пухлее».
- *  - Снэпнуть не ту координату (например, Y для вертикальной линии).
- *  - Не пересчитывать фабрику при изменении DPR.
+ * Идея:
+ *   devicePx = round(lineWidth * dpr)  → рисуем ровно целым количеством физпикселей
+ *   если devicePx нечётное → центр штриха должен лежать на полупикселе CSS, поэтому сдвигаем на 0.5/dpr
+ *   snap(v) округляет координату к ближайшему центру пиксельной сетки с учётом этого сдвига
  */
-export const createSnap = ({
+const createSnap = ({
   lineWidth = 1,
-  dpr = 1,
+  dpr,
 }: {
   lineWidth: number;
   dpr: number;
-}): { lw: number; snap: (v: number) => number } => {
+}) => {
   const devicePx = Math.max(1, Math.round(lineWidth * dpr));
   const lw = devicePx / dpr;
-  const half = devicePx % 2 === 1 ? 0.5 / dpr : 0;
-  const snap = (v: number) => Math.round(v * dpr) / dpr + half;
+  const offset = devicePx % 2 === 1 ? 0.5 / dpr : 0; // чётная толщина → 0, нечётная → 0.5/dpr
+  const snap = (v: number) => Math.round((v + offset) * dpr) / dpr - offset;
   return { lw, snap };
 };
 
 export function Grid({
-  step = 25,
-  strokeStyle = '#d1d5db',
+  step = 20,
+  strokeStyle = '#e5e7eb',
   lineWidth = 1,
+  z = 10,
+  visible = true,
 }: GridProps) {
-  const { size, registerDraw } = useCanvas();
+  const { registerLayer, size, dpr } = useCanvas();
 
   useEffect(() => {
-    return registerDraw((ctx) => {
-      const { width, height, dpr } = size;
-      const { lw, snap } = createSnap({ lineWidth, dpr });
+    if (!visible) return;
+    return registerLayer({
+      z,
+      visible,
+      space: 'screen',
+      draw: (ctx) => {
+        const { w, h } = size;
+        const { lw, snap } = createSnap({ lineWidth, dpr });
 
-      ctx.save();
+        ctx.save();
+        ctx.lineWidth = lw;
+        ctx.strokeStyle = strokeStyle;
+        ctx.beginPath();
 
-      ctx.lineWidth = lw;
-      ctx.lineCap = 'butt';
-      ctx.lineJoin = 'miter';
-      ctx.strokeStyle = strokeStyle;
-      ctx.beginPath();
-      for (let x = 0; x <= width; x += step) {
-        const X = snap(x);
-        ctx.moveTo(X, 0);
-        ctx.lineTo(X, height);
-      }
-      for (let y = 0; y <= height; y += step) {
-        const Y = snap(y);
-        ctx.moveTo(0, Y);
-        ctx.lineTo(width, Y);
-      }
-      ctx.stroke();
+        const startX = 0;
+        const endX = w;
+        const firstV = Math.ceil(startX / step) * step;
+        for (let x = firstV; x <= endX; x += step) {
+          const xs = snap(x);
+          ctx.moveTo(xs, 0);
+          ctx.lineTo(xs, h);
+        }
 
-      ctx.restore();
+        const startY = 0;
+        const endY = h;
+        const firstH = Math.ceil(startY / step) * step;
+        for (let y = firstH; y <= endY; y += step) {
+          const ys = snap(y);
+          ctx.moveTo(0, ys);
+          ctx.lineTo(w, ys);
+        }
+
+        ctx.stroke();
+        ctx.restore();
+      },
     });
   }, [
-    size.width,
-    size.height,
-    size.dpr,
+    registerLayer,
     step,
     strokeStyle,
     lineWidth,
-    registerDraw,
+    z,
+    visible,
+    size.w,
+    size.h,
+    dpr,
     size,
   ]);
 
