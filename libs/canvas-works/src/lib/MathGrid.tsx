@@ -1,264 +1,299 @@
+// MathGrid.tsx
 'use client';
-import { useEffect } from 'react';
+
+import { useEffect, useRef } from 'react';
 import { useCanvas } from './context';
 
-function pickDecStep(pxPerWorld: number, targetPx: number): number {
-  if (!isFinite(pxPerWorld) || pxPerWorld <= 0) return 1;
-  const raw = targetPx / pxPerWorld;
-  const pow10 = Math.pow(10, Math.floor(Math.log10(raw)));
-  const candidates = [1, 2, 5, 10].map((x) => x * pow10);
-  return candidates.reduce(
-    (best, x) => (Math.abs(x - raw) < Math.abs(best - raw) ? x : best),
-    candidates[0]
-  );
-}
+type Point = { x: number; y: number };
 
-function clamp(v: number, a: number, b: number) {
-  return Math.max(a, Math.min(b, v));
-}
-
-function align1px(v: number, dpr: number) {
-  return Math.round(v * dpr) / dpr + 0.5 / dpr;
-}
-
-function roundToStep(v: number, step: number) {
-  if (!isFinite(v) || !isFinite(step) || step === 0) return v;
-  const n = Math.round(v / step);
-  const r = n * step;
-  return Object.is(r, -0) ? 0 : r;
-}
-
-function formatTickByStep(v: number, step: number): string {
-  const abs = Math.abs(step);
-  if (abs >= 1) return String(Math.round(v));
-  const decimals = Math.max(0, Math.ceil(-Math.log10(abs)));
-  return v.toFixed(decimals);
-}
-
-export function MathGrid({
-  z = -1000,
-  targetPx = 80,
-  majorEvery = 5,
-  majorLabelScale = 1.15,
-  colorMinor = 'rgba(0,0,0,0.06)',
-  colorMajor = 'rgba(0,0,0,0.12)',
-  axisColor = 'rgba(0,0,0,0.35)',
-  labelColor = 'rgba(0,0,0,0.75)',
-  centerAxes = true,
-}: {
+export interface MathGridProps {
+  /** Z-index в стеке canvas-слоёв (больше — выше) */
   z?: number;
-  targetPx?: number;
-  majorEvery?: number;
-  majorLabelScale?: number;
-  colorMinor?: string;
-  colorMajor?: string;
-  axisColor?: string;
-  labelColor?: string;
-  centerAxes?: boolean;
-}) {
-  const { registerLayer, size, dpr, toWorld, toScreen } = useCanvas();
+  /** Показывать ли вспомогательную «тонкую» сетку между мажорными линиями */
+  showMinor?: boolean;
+}
 
+function distX(a: Point, b: Point) {
+  return Math.abs(a.x - b.x);
+}
+
+function distY(a: Point, b: Point) {
+  return Math.abs(a.y - b.y);
+}
+
+function fmtNumber(x: number) {
+  // Небольшое форматирование чисел для подписей осей
+  if (!isFinite(x)) return '';
+  if (Math.abs(x) < 1e-9) return '0';
+  // Если число «красивое» — показываем без лишних знаков
+  const abs = Math.abs(x);
+  if (abs >= 1e-3 && abs < 1e6) {
+    const s = x.toFixed(6).replace(/\.?0+$/, '');
+    return s;
+  }
+  // Иначе в экспоненциальном
+  return x.toExponential(2).replace(/\+?0*(e[+-]?)/i, '$1');
+}
+
+/**
+ * Подбирает «красивый» шаг сетки, исходя из текущего масштаба
+ * так, чтобы интервалы на экране были близки к targetPx.
+ */
+function pickNiceStep(pxPerUnit: number, targetPx: number) {
+  // Список «приятных» коэффициентов
+  const candidates = [1, 2, 2.5, 5, 10];
+  // Нормализуем: сколько единиц мира на targetPx
+  const unitsPerTarget = Math.max(1e-12, targetPx / Math.max(1e-12, pxPerUnit));
+
+  // Вычисляем порядок величины
+  const p10 = Math.pow(10, Math.floor(Math.log10(unitsPerTarget)));
+
+  let best = candidates[0] * p10;
+  let bestDiff = Infinity;
+  for (let k = -1; k <= 3; k++) {
+    for (const c of candidates) {
+      const step = c * p10 * Math.pow(10, k);
+      const diff = Math.abs(step * pxPerUnit - targetPx);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = step;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Округление вниз к ближайшему кратному step
+ */
+function floorToStep(x: number, step: number) {
+  return Math.floor(x / step) * step;
+}
+
+/**
+ * Округление вверх к ближайшему кратному step
+ */
+function ceilToStep(x: number, step: number) {
+  return Math.ceil(x / step) * step;
+}
+
+export function MathGrid({ z = 0, showMinor = false }: MathGridProps) {
+  const {
+    dpr,
+    size, // { w, h } в CSS px
+    toWorld,
+    toScreen,
+    registerLayer,
+    resetView,
+    world,
+  } = useCanvas();
+
+  // ---- Автоцентрирование (0,0) при первом появлении/изменении реального размера канваса ----
+  // Проблема: resetView() вызывался слишком рано (до того как CanvasProvider измерит фактический CSS‑размер)
+  // и центрировался на дефолтных 300×150. После ресайза матрица оставалась с переводом на 150,75 — отсюда «сбитый» центр.
+  // Решение: центрируем «лениво», пока (0,0) не окажется близко к геометрическому центру текущего размера.
+  // Разрешаем повторный reset при первом изменении size, но только пока нет масштабирования/поворота (world≈единичная + сдвиг).
+  const didAutoCenterRef = useRef(false);
+  useEffect(() => {
+    if (didAutoCenterRef.current) return;
+    if (size.w <= 0 || size.h <= 0) return;
+
+    const s0 = toScreen({ x: 0, y: 0 });
+    const nearCenter =
+      Math.abs(s0.x - size.w / 2) < 0.5 && Math.abs(s0.y - size.h / 2) < 0.5;
+
+    if (nearCenter) {
+      // Центр достигнут — можно прекратить автологику
+      didAutoCenterRef.current = true;
+      return;
+    }
+
+    // Без зума/поворота — только сдвиг (начальные состояния)
+    const unscaled =
+      Math.abs(world.a - 1) < 1e-9 &&
+      Math.abs(world.d - 1) < 1e-9 &&
+      Math.abs(world.b) < 1e-9 &&
+      Math.abs(world.c) < 1e-9;
+
+    // Первичный старт (0,0 возле левого верхнего угла) или мы всё еще в «не зумленном» состоянии — можно сбросить
+    const nearTopLeft = Math.abs(s0.x) < 0.5 && Math.abs(s0.y) < 0.5;
+    if (nearTopLeft || unscaled) {
+      resetView(); // поместить (0,0) в геометрический центр текущего CSS‑размера
+      // ВАЖНО: не отмечаем didAutoCenterRef = true здесь. Дождемся следующего рендера и проверим, что реально попали в центр.
+    }
+  }, [size.w, size.h, toScreen, resetView, world.a, world.b, world.c, world.d]);
+
+  // ---- Слой сетки ----
   useEffect(() => {
     return registerLayer({
       z,
       space: 'screen',
       visible: true,
       draw: (ctx) => {
-        // world bounds of viewport (toWorld принимает CSS px!)
-        const tl = toWorld({ x: 0, y: 0 });
-        const br = toWorld({ x: size.w, y: size.h });
-        const x0 = Math.min(tl.x, br.x);
-        const x1 = Math.max(tl.x, br.x);
-        const y0 = Math.min(tl.y, br.y);
-        const y1 = Math.max(tl.y, br.y);
+        const W = Math.max(0, Math.floor(size.w));
+        const H = Math.max(0, Math.floor(size.h));
+        if (W === 0 || H === 0) return;
 
-        // px-per-world (CSS px!)
-        const xUnitPx = Math.abs(
-          toScreen({ x: 1, y: 0 }).x - toScreen({ x: 0, y: 0 }).x
-        );
-        const yUnitPx = Math.abs(
-          toScreen({ x: 0, y: 1 }).y - toScreen({ x: 0, y: 0 }).y
-        );
+        // Вычисляем текущий масштаб: сколько пикселей на единицу мира по осям
+        const s00 = toScreen({ x: 0, y: 0 });
+        const s10 = toScreen({ x: 1, y: 0 });
+        const s01 = toScreen({ x: 0, y: 1 });
+        const pxPerUnitX = Math.max(1e-9, distX(s10, s00));
+        const pxPerUnitY = Math.max(1e-9, distY(s01, s00));
 
-        const stepX = pickDecStep(xUnitPx, targetPx);
-        const stepY = pickDecStep(yUnitPx, targetPx);
+        // Подбираем шаги для мажорной сетки (около 100px между линиями)
+        const majorStepX = pickNiceStep(pxPerUnitX, 110);
+        const majorStepY = pickNiceStep(pxPerUnitY, 110);
 
-        const iStart = Math.floor(x0 / stepX);
-        const iEnd = Math.ceil(x1 / stepX);
-        const jStart = Math.floor(y0 / stepY);
-        const jEnd = Math.ceil(y1 / stepY);
+        // И минорная сетка — 5 делений
+        const minorStepX = majorStepX / 5;
+        const minorStepY = majorStepY / 5;
 
-        ctx.lineWidth = 1 / dpr;
+        // Вычисляем видимую область в world-координатах
+        const worldTL = toWorld({ x: 0, y: 0 });
+        const worldBR = toWorld({ x: W, y: H });
+        const x0 = Math.min(worldTL.x, worldBR.x);
+        const x1 = Math.max(worldTL.x, worldBR.x);
+        const y0 = Math.min(worldTL.y, worldBR.y);
+        const y1 = Math.max(worldTL.y, worldBR.y);
 
-        // MINOR verticals
-        ctx.strokeStyle = colorMinor;
-        ctx.beginPath();
-        for (let i = iStart; i <= iEnd; i++) {
-          if (majorEvery > 0 && i % majorEvery === 0) continue;
-          const x = i * stepX;
-          const sx = toScreen({ x, y: 0 }).x; // CSS px
-          if (sx < -1 || sx > size.w + 1) continue;
-          const ax = align1px(sx, dpr);
-          ctx.moveTo(ax, align1px(0, dpr));
-          ctx.lineTo(ax, align1px(size.h, dpr));
-        }
-        ctx.stroke();
+        // Диапазоны для сетки
+        const xStartMinor = floorToStep(x0, minorStepX);
+        const xEndMinor = ceilToStep(x1, minorStepX);
+        const yStartMinor = floorToStep(y0, minorStepY);
+        const yEndMinor = ceilToStep(y1, minorStepY);
 
-        // MAJOR verticals
-        ctx.strokeStyle = colorMajor;
-        ctx.beginPath();
-        for (let i = iStart; i <= iEnd; i++) {
-          if (!(majorEvery > 0 && i % majorEvery === 0)) continue;
-          const x = i * stepX;
-          const sx = toScreen({ x, y: 0 }).x;
-          if (sx < -1 || sx > size.w + 1) continue;
-          const ax = align1px(sx, dpr);
-          ctx.moveTo(ax, align1px(0, dpr));
-          ctx.lineTo(ax, align1px(size.h, dpr));
-        }
-        ctx.stroke();
+        const xStartMajor = floorToStep(x0, majorStepX);
+        const xEndMajor = ceilToStep(x1, majorStepX);
+        const yStartMajor = floorToStep(y0, majorStepY);
+        const yEndMajor = ceilToStep(y1, majorStepY);
 
-        // MINOR horizontals
-        ctx.strokeStyle = colorMinor;
-        ctx.beginPath();
-        for (let j = jStart; j <= jEnd; j++) {
-          if (majorEvery > 0 && j % majorEvery === 0) continue;
-          const y = j * stepY;
-          const sy = toScreen({ x: 0, y }).y;
-          if (sy < -1 || sy > size.h + 1) continue;
-          const ay = align1px(sy, dpr);
-          ctx.moveTo(align1px(0, dpr), ay);
-          ctx.lineTo(align1px(size.w, dpr), ay);
-        }
-        ctx.stroke();
+        // Тонкие линии
+        ctx.save();
+        const thin = Math.max(0.5, 0.5 * dpr);
+        const mid = Math.max(1, 1 * dpr);
+        const thick = Math.max(1.5, 1.5 * dpr);
 
-        // MAJOR horizontals
-        ctx.strokeStyle = colorMajor;
-        ctx.beginPath();
-        for (let j = jStart; j <= jEnd; j++) {
-          if (!(majorEvery > 0 && j % majorEvery === 0)) continue;
-          const y = j * stepY;
-          const sy = toScreen({ x: 0, y }).y;
-          if (sy < -1 || sy > size.h + 1) continue;
-          const ay = align1px(sy, dpr);
-          ctx.moveTo(align1px(0, dpr), ay);
-          ctx.lineTo(align1px(size.w, dpr), ay);
-        }
-        ctx.stroke();
-
-        // Оси в (0,0)
-        const s0 = toScreen({ x: 0, y: 0 }); // CSS px, центр мира
-        ctx.strokeStyle = axisColor;
-        ctx.beginPath();
-        // X axis
-        if (s0.y >= -1 && s0.y <= size.h + 1) {
-          const ay = align1px(s0.y, dpr);
-          ctx.moveTo(align1px(0, dpr), ay);
-          ctx.lineTo(align1px(size.w, dpr), ay);
-        }
-        // Y axis
-        if (s0.x >= -1 && s0.x <= size.w + 1) {
-          const ax = align1px(s0.x, dpr);
-          ctx.moveTo(ax, align1px(0, dpr));
-          ctx.lineTo(ax, align1px(size.h, dpr));
-        }
-        ctx.stroke();
-
-        // Подписи: вдоль видимых осей, не только по краям
-        const fontPx = clamp(12 * majorLabelScale, 10, 18);
-        ctx.fillStyle = labelColor;
-
-        // X labels
-        {
-          const minDx = targetPx * 0.8;
-          let lastX = -Infinity;
-
-          let yPos: number;
-          let baseline: CanvasTextBaseline = 'top';
-          if (s0.y >= 0 && s0.y <= size.h) {
-            const below = size.h - s0.y;
-            if (below >= fontPx + 6) {
-              baseline = 'top';
-              yPos = s0.y + 4;
-            } else {
-              baseline = 'bottom';
-              yPos = s0.y - 4;
-            }
-          } else {
-            baseline = 'top';
-            yPos = size.h - fontPx - 2;
-          }
-
-          ctx.textBaseline = baseline;
-          ctx.textAlign = 'center';
-          ctx.font = `${fontPx}px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu`;
-
-          for (let i = iStart; i <= iEnd; i++) {
-            if (!(majorEvery > 0 && i % majorEvery === 0)) continue;
-            const x = i * stepX;
+        if (showMinor) {
+          ctx.beginPath();
+          for (let x = xStartMinor; x <= xEndMinor; x += minorStepX) {
+            // пропускаем мажорные, чтобы не наслаивать толщину
+            if (Math.abs(x / majorStepX - Math.round(x / majorStepX)) < 1e-9)
+              continue;
             const sx = toScreen({ x, y: 0 }).x;
-            if (sx < -10 || sx > size.w + 10) continue;
-            if (sx - lastX < minDx) continue;
-            lastX = sx;
-            const v = roundToStep(x, stepX);
-            ctx.fillText(formatTickByStep(v, stepX), sx, yPos!);
+            ctx.moveTo(sx, 0);
+            ctx.lineTo(sx, H);
           }
-        }
-
-        // Y labels
-        {
-          const minDy = targetPx * 0.75;
-          let lastY = -Infinity;
-
-          let xPos: number;
-          let align: CanvasTextAlign = 'right';
-          if (s0.x >= 0 && s0.x <= size.w) {
-            const right = size.w - s0.x;
-            if (right >= 36) {
-              align = 'left';
-              xPos = s0.x + 4;
-            } else {
-              align = 'right';
-              xPos = s0.x - 4;
-            }
-          } else {
-            align = 'left';
-            xPos = 4;
-          }
-
-          ctx.textAlign = align;
-          ctx.textBaseline = 'middle';
-          ctx.font = `${fontPx}px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu`;
-
-          for (let j = jStart; j <= jEnd; j++) {
-            if (!(majorEvery > 0 && j % majorEvery === 0)) continue;
-            const y = j * stepY;
+          for (let y = yStartMinor; y <= yEndMinor; y += minorStepY) {
+            if (Math.abs(y / majorStepY - Math.round(y / majorStepY)) < 1e-9)
+              continue;
             const sy = toScreen({ x: 0, y }).y;
-            if (sy < -10 || sy > size.h + 10) continue;
-            if (sy - lastY < minDy) continue;
-            lastY = sy;
-            const v = roundToStep(y, stepY);
-            ctx.fillText(formatTickByStep(v, stepY), xPos!, sy);
+            ctx.moveTo(0, sy);
+            ctx.lineTo(W, sy);
+          }
+          ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+          ctx.lineWidth = thin;
+          ctx.stroke();
+        }
+
+        // Толстые линии (мажор)
+        ctx.beginPath();
+        for (let x = xStartMajor; x <= xEndMajor; x += majorStepX) {
+          const sx = toScreen({ x, y: 0 }).x;
+          ctx.moveTo(sx, 0);
+          ctx.lineTo(sx, H);
+        }
+        for (let y = yStartMajor; y <= yEndMajor; y += majorStepY) {
+          const sy = toScreen({ x: 0, y }).y;
+          ctx.moveTo(0, sy);
+          ctx.lineTo(W, sy);
+        }
+        ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+        ctx.lineWidth = thin;
+        ctx.stroke();
+
+        // Оси (X=0, Y=0)
+        ctx.beginPath();
+        // Где на экране проходит ось
+        const axisXScreen = toScreen({ x: 0, y: 0 }).x;
+        const axisYScreen = toScreen({ x: 0, y: 0 }).y;
+        const xAxisVisible = axisYScreen >= 0 && axisYScreen <= H;
+        const yAxisVisible = axisXScreen >= 0 && axisXScreen <= W;
+        if (yAxisVisible) {
+          ctx.moveTo(axisXScreen, 0);
+          ctx.lineTo(axisXScreen, H);
+        }
+        if (xAxisVisible) {
+          ctx.moveTo(0, axisYScreen);
+          ctx.lineTo(W, axisYScreen);
+        }
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.lineWidth = thick;
+        ctx.stroke();
+
+        // Засечки и подписи на осях ТОЛЬКО для мажорных делений
+        ctx.font =
+          '12px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial';
+        ctx.fillStyle = 'rgba(0,0,0,0.85)';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+
+        const tickLen = 6; // длина засечки в px
+        ctx.lineWidth = mid;
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+
+        // Вертикальные засечки на оси X и подписи X-координат
+        if (xAxisVisible) {
+          ctx.beginPath();
+          for (let x = xStartMajor; x <= xEndMajor; x += majorStepX) {
+            const sx = toScreen({ x, y: 0 }).x;
+            ctx.moveTo(sx, axisYScreen - tickLen);
+            ctx.lineTo(sx, axisYScreen + tickLen);
+          }
+          ctx.stroke();
+
+          for (let x = xStartMajor; x <= xEndMajor; x += majorStepX) {
+            if (Math.abs(x) < 1e-9) continue; // не дублируем 0 на пересечении осей
+            const sx = toScreen({ x, y: 0 }).x;
+            ctx.fillText(fmtNumber(x), sx, axisYScreen + tickLen + 2);
           }
         }
+
+        // Горизонтальные засечки на оси Y и подписи Y-координат
+        if (yAxisVisible) {
+          ctx.beginPath();
+          for (let y = yStartMajor; y <= yEndMajor; y += majorStepY) {
+            const sy = toScreen({ x: 0, y }).y;
+            ctx.moveTo(axisXScreen - tickLen, sy);
+            ctx.lineTo(axisXScreen + tickLen, sy);
+          }
+          ctx.stroke();
+
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'middle';
+          for (let y = yStartMajor; y <= yEndMajor; y += majorStepY) {
+            if (Math.abs(y) < 1e-9) continue; // не дублируем 0 на пересечении осей
+            const sy = toScreen({ x: 0, y }).y;
+            ctx.fillText(fmtNumber(y), axisXScreen - tickLen - 4, sy);
+          }
+        }
+
+        // Подпись осей (стрелочки)
+        if (xAxisVisible) {
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText('x', W - 4, axisYScreen - 4);
+        }
+        if (yAxisVisible) {
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          ctx.fillText('y', axisXScreen + 4, 4);
+        }
+
+        ctx.restore();
       },
     });
-  }, [
-    registerLayer,
-    size.w,
-    size.h,
-    dpr,
-    toWorld,
-    toScreen,
-    targetPx,
-    z,
-    majorEvery,
-    majorLabelScale,
-    colorMinor,
-    colorMajor,
-    axisColor,
-    labelColor,
-  ]);
+  }, [z, dpr, size.w, size.h, toWorld, toScreen, registerLayer, showMinor]);
 
   return null;
 }
