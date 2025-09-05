@@ -7,17 +7,27 @@ function pickDecStep(pxPerWorld: number, targetPx: number): number {
   const raw = targetPx / pxPerWorld;
   const pow10 = Math.pow(10, Math.floor(Math.log10(raw)));
   const candidates = [1, 2, 5, 10].map((x) => x * pow10);
-  return candidates.reduce((best, x) => (Math.abs(x - raw) < Math.abs(best - raw) ? x : best), candidates[0]);
+  return candidates.reduce(
+    (best, x) => (Math.abs(x - raw) < Math.abs(best - raw) ? x : best),
+    candidates[0]
+  );
 }
 
-function clamp(v: number, a: number, b: number) { return Math.max(a, Math.min(b, v)); }
-function align1px(v: number, dpr: number) { return Math.round(v * dpr) / dpr + 0.5 / dpr; }
+function clamp(v: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, v));
+}
+
+function align1px(v: number, dpr: number) {
+  return Math.round(v * dpr) / dpr + 0.5 / dpr;
+}
+
 function roundToStep(v: number, step: number) {
   if (!isFinite(v) || !isFinite(step) || step === 0) return v;
   const n = Math.round(v / step);
   const r = n * step;
   return Object.is(r, -0) ? 0 : r;
 }
+
 function formatTickByStep(v: number, step: number): string {
   const abs = Math.abs(step);
   if (abs >= 1) return String(Math.round(v));
@@ -26,16 +36,16 @@ function formatTickByStep(v: number, step: number): string {
 }
 
 export function MathGrid({
-                           z = -1000,
-                           targetPx = 80,
-                           majorEvery = 5,
-                           majorLabelScale = 1.15,
-                           colorMinor = 'rgba(0,0,0,0.06)',
-                           colorMajor = 'rgba(0,0,0,0.12)',
-                           axisColor = 'rgba(0,0,0,0.35)',
-                           labelColor = 'rgba(0,0,0,0.75)',
-                           centerAxes = true,
-                         }: {
+  z = -1000,
+  targetPx = 80,
+  majorEvery = 5,
+  majorLabelScale = 1.15,
+  colorMinor = 'rgba(0,0,0,0.06)',
+  colorMajor = 'rgba(0,0,0,0.12)',
+  axisColor = 'rgba(0,0,0,0.35)',
+  labelColor = 'rgba(0,0,0,0.75)',
+  centerAxes = true,
+}: {
   z?: number;
   targetPx?: number;
   majorEvery?: number;
@@ -63,16 +73,20 @@ export function MathGrid({
         const y1 = Math.max(tl.y, br.y);
 
         // px-per-world (CSS px!)
-        const xUnitPx = Math.abs(toScreen({ x: 1, y: 0 }).x - toScreen({ x: 0, y: 0 }).x);
-        const yUnitPx = Math.abs(toScreen({ x: 0, y: 1 }).y - toScreen({ x: 0, y: 0 }).y);
+        const xUnitPx = Math.abs(
+          toScreen({ x: 1, y: 0 }).x - toScreen({ x: 0, y: 0 }).x
+        );
+        const yUnitPx = Math.abs(
+          toScreen({ x: 0, y: 1 }).y - toScreen({ x: 0, y: 0 }).y
+        );
 
         const stepX = pickDecStep(xUnitPx, targetPx);
         const stepY = pickDecStep(yUnitPx, targetPx);
 
         const iStart = Math.floor(x0 / stepX);
-        const iEnd   = Math.ceil (x1 / stepX);
+        const iEnd = Math.ceil(x1 / stepX);
         const jStart = Math.floor(y0 / stepY);
-        const jEnd   = Math.ceil (y1 / stepY);
+        const jEnd = Math.ceil(y1 / stepY);
 
         ctx.lineWidth = 1 / dpr;
 
@@ -163,10 +177,16 @@ export function MathGrid({
           let baseline: CanvasTextBaseline = 'top';
           if (s0.y >= 0 && s0.y <= size.h) {
             const below = size.h - s0.y;
-            if (below >= fontPx + 6) { baseline = 'top'; yPos = s0.y + 4; }
-            else { baseline = 'bottom'; yPos = s0.y - 4; }
+            if (below >= fontPx + 6) {
+              baseline = 'top';
+              yPos = s0.y + 4;
+            } else {
+              baseline = 'bottom';
+              yPos = s0.y - 4;
+            }
           } else {
-            baseline = 'top'; yPos = size.h - fontPx - 2;
+            baseline = 'top';
+            yPos = size.h - fontPx - 2;
           }
 
           ctx.textBaseline = baseline;
@@ -194,10 +214,16 @@ export function MathGrid({
           let align: CanvasTextAlign = 'right';
           if (s0.x >= 0 && s0.x <= size.w) {
             const right = size.w - s0.x;
-            if (right >= 36) { align = 'left'; xPos = s0.x + 4; }
-            else { align = 'right'; xPos = s0.x - 4; }
+            if (right >= 36) {
+              align = 'left';
+              xPos = s0.x + 4;
+            } else {
+              align = 'right';
+              xPos = s0.x - 4;
+            }
           } else {
-            align = 'left'; xPos = 4;
+            align = 'left';
+            xPos = 4;
           }
 
           ctx.textAlign = align;
@@ -219,10 +245,19 @@ export function MathGrid({
     });
   }, [
     registerLayer,
-    size.w, size.h, dpr,
-    toWorld, toScreen,
-    targetPx, z, majorEvery, majorLabelScale,
-    colorMinor, colorMajor, axisColor, labelColor,
+    size.w,
+    size.h,
+    dpr,
+    toWorld,
+    toScreen,
+    targetPx,
+    z,
+    majorEvery,
+    majorLabelScale,
+    colorMinor,
+    colorMajor,
+    axisColor,
+    labelColor,
   ]);
 
   return null;

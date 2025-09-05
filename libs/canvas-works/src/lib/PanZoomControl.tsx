@@ -6,14 +6,21 @@ import { getScale } from './matrix';
 type Pointer = { id: number; x: number; y: number };
 
 export function PanZoomControls({
-                                  minScale = 0.02,   // можно еще меньше, если надо видеть тысячные
-                                  maxScale = 4096,
-                                }: { minScale?: number; maxScale?: number }) {
+  minScale = 0.02, // можно еще меньше, если надо видеть тысячные
+  maxScale = 4096,
+}: {
+  minScale?: number;
+  maxScale?: number;
+}) {
   const { canvas, world, panByScreen, zoomAtScreen, resetView } = useCanvas();
 
   const drag = useRef<{ active: boolean; x: number; y: number } | null>(null);
   const pointersRef = useRef<Map<number, Pointer>>(new Map());
-  const pinchRef = useRef<{ prevDist: number; prevCx: number; prevCy: number } | null>(null);
+  const pinchRef = useRef<{
+    prevDist: number;
+    prevCx: number;
+    prevCy: number;
+  } | null>(null);
 
   const curScale = () => getScale(world); // scale в world→CSS
 
@@ -21,7 +28,11 @@ export function PanZoomControls({
     const el = canvas;
     if (!el) return;
 
-    const getPt = (e: PointerEvent): Pointer => ({ id: e.pointerId, x: e.clientX, y: e.clientY });
+    const getPt = (e: PointerEvent): Pointer => ({
+      id: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+    });
 
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0 && e.pointerType === 'mouse') return;
@@ -40,7 +51,7 @@ export function PanZoomControls({
         const cy = (pts[0].y + pts[1].y) / 2 - rect.top;
         pinchRef.current = { prevDist: dist, prevCx: cx, prevCy: cy };
       }
-      (el.style).cursor = 'grabbing';
+      el.style.cursor = 'grabbing';
     };
 
     const onPointerMove = (e: PointerEvent) => {
@@ -56,7 +67,10 @@ export function PanZoomControls({
         const cx = (pts[0].x + pts[1].x) / 2 - rect.left;
         const cy = (pts[0].y + pts[1].y) / 2 - rect.top;
 
-        const factor = dist > 0 && pinchRef.current.prevDist > 0 ? dist / pinchRef.current.prevDist : 1;
+        const factor =
+          dist > 0 && pinchRef.current.prevDist > 0
+            ? dist / pinchRef.current.prevDist
+            : 1;
         const cur = curScale();
         const next = Math.min(maxScale, Math.max(minScale, cur * factor));
         const apply = next / cur;
@@ -67,7 +81,10 @@ export function PanZoomControls({
         return;
       }
 
-      if (drag.current?.active && (e.buttons & 1 || e.pointerType !== 'mouse')) {
+      if (
+        drag.current?.active &&
+        (e.buttons & 1 || e.pointerType !== 'mouse')
+      ) {
         e.preventDefault();
         const dx = e.clientX - drag.current.x;
         const dy = e.clientY - drag.current.y;
@@ -80,13 +97,14 @@ export function PanZoomControls({
       if (drag.current?.active && e.button === 0) drag.current = null;
       pointersRef.current.delete(e.pointerId);
       if (pointersRef.current.size < 2) pinchRef.current = null;
-      (el.style).cursor = 'grab';
+      el.style.cursor = 'grab';
     };
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1;
-      const dx = (e).deltaX * unit || 0;
+      const unit =
+        e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1;
+      const dx = e.deltaX * unit || 0;
       const dy = e.deltaY * unit;
 
       if (e.ctrlKey) {
@@ -108,7 +126,9 @@ export function PanZoomControls({
       }
     };
 
-    const onDbl = () => { resetView(); };
+    const onDbl = () => {
+      resetView();
+    };
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === '0') resetView();
@@ -145,10 +165,21 @@ export function PanZoomControls({
       el.removeEventListener('wheel', onWheel);
       el.removeEventListener('dblclick', onDbl);
       window.removeEventListener('keydown', onKey);
-      (el.style).cursor = '';
-      (el.style).touchAction = '';
+      el.style.cursor = '';
+      el.style.touchAction = '';
     };
-  }, [canvas, world.a, world.b, world.c, world.d, panByScreen, zoomAtScreen, resetView, minScale, maxScale]);
+  }, [
+    canvas,
+    world.a,
+    world.b,
+    world.c,
+    world.d,
+    panByScreen,
+    zoomAtScreen,
+    resetView,
+    minScale,
+    maxScale,
+  ]);
 
   return null;
 }

@@ -30,7 +30,10 @@ export type CanvasApi = {
   getWorldRect: () => { x0: number; y0: number; x1: number; y1: number };
 
   /** Подогнать вид под world-прямоугольник (с внешним отступом в пикселях) */
-  fitToRect: (rect: { x0: number; y0: number; x1: number; y1: number }, marginPx?: number) => void;
+  fitToRect: (
+    rect: { x0: number; y0: number; x1: number; y1: number },
+    marginPx?: number
+  ) => void;
 
   /** Подписка на изменения вида (после каждого pan/zoom/reset/setWorld) */
   onViewChange: (cb: (world: Matrix) => void) => () => void;

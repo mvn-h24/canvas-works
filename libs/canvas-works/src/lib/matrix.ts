@@ -1,4 +1,11 @@
-export type Matrix = { a: number; b: number; c: number; d: number; e: number; f: number }; // [a c e; b d f; 0 0 1]
+export type Matrix = {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+}; // [a c e; b d f; 0 0 1]
 export const I: Matrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
 
 export function mul(m1: Matrix, m2: Matrix): Matrix {
@@ -12,20 +19,38 @@ export function mul(m1: Matrix, m2: Matrix): Matrix {
   };
 }
 
-export const translate = (tx: number, ty: number): Matrix => ({ a: 1, b: 0, c: 0, d: 1, e: tx, f: ty });
-export const scale = (sx: number, sy: number): Matrix => ({ a: sx, b: 0, c: 0, d: sy, e: 0, f: 0 });
-export const scaleAt = (sx: number, sy: number, px: number, py: number): Matrix =>
-  mul(translate(px, py), mul(scale(sx, sy), translate(-px, -py)));
+export const translate = (tx: number, ty: number): Matrix => ({
+  a: 1,
+  b: 0,
+  c: 0,
+  d: 1,
+  e: tx,
+  f: ty,
+});
+export const scale = (sx: number, sy: number): Matrix => ({
+  a: sx,
+  b: 0,
+  c: 0,
+  d: sy,
+  e: 0,
+  f: 0,
+});
+export const scaleAt = (
+  sx: number,
+  sy: number,
+  px: number,
+  py: number
+): Matrix => mul(translate(px, py), mul(scale(sx, sy), translate(-px, -py)));
 
 export function invert(m: Matrix): Matrix | null {
   const det = m.a * m.d - m.b * m.c;
   if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return null; // guard from singular
   const invDet = 1 / det;
   return {
-    a:  m.d * invDet,
+    a: m.d * invDet,
     b: -m.b * invDet,
     c: -m.c * invDet,
-    d:  m.a * invDet,
+    d: m.a * invDet,
     e: (m.c * m.f - m.d * m.e) * invDet,
     f: (m.b * m.e - m.a * m.f) * invDet,
   };
