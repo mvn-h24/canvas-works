@@ -1,13 +1,14 @@
 'use client';
-import {
-  CanvasProvider,
-  MathGrid,
-} from '@canvas-works/canvas-works';
+import { CanvasProvider, FunctionPlot, MathGrid } from '@canvas-works/canvas-works';
+import { SinChart } from '@/app/ui/CanvasTest/SinChart';
 
 export const CanvasTest = () => {
   return (
     <CanvasProvider background="#fff" className="flex-grow !h-full">
-      <MathGrid centerAxes />
+      <MathGrid />
+      <SinChart />
+      <FunctionPlot fn={(x) => 150} color="red" />
+      <FunctionPlot fn={(x) => -150} color="red" />
     </CanvasProvider>
   );
 };
