@@ -14,7 +14,7 @@ export type CanvasApi = {
   /** Текущий DPR (devicePixelRatio) */
   dpr: number;
 
-  /** CSS‑размеры канваса */
+  /** CSS-размеры канваса */
   size: { w: number; h: number };
 
   /** Мировая матрица (CSS px → CSS px), применяемая поверх DPR */
@@ -25,6 +25,15 @@ export type CanvasApi = {
   /** Конвертация точек */
   toScreen: (pt: { x: number; y: number }) => { x: number; y: number };
   toWorld: (pt: { x: number; y: number }) => { x: number; y: number };
+
+  /** Видимая область в world-координатах */
+  getWorldRect: () => { x0: number; y0: number; x1: number; y1: number };
+
+  /** Подогнать вид под world-прямоугольник (с внешним отступом в пикселях) */
+  fitToRect: (rect: { x0: number; y0: number; x1: number; y1: number }, marginPx?: number) => void;
+
+  /** Подписка на изменения вида (после каждого pan/zoom/reset/setWorld) */
+  onViewChange: (cb: (world: Matrix) => void) => () => void;
 
   /** Регистрация слоя */
   registerLayer: (opts: {

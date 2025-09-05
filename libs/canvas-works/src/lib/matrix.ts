@@ -17,15 +17,15 @@ export const scale = (sx: number, sy: number): Matrix => ({ a: sx, b: 0, c: 0, d
 export const scaleAt = (sx: number, sy: number, px: number, py: number): Matrix =>
   mul(translate(px, py), mul(scale(sx, sy), translate(-px, -py)));
 
-export function invert(m: Matrix): Matrix {
+export function invert(m: Matrix): Matrix | null {
   const det = m.a * m.d - m.b * m.c;
-  if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return I; // guard from singular
+  if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return null; // guard from singular
   const invDet = 1 / det;
   return {
-    a: m.d * invDet,
+    a:  m.d * invDet,
     b: -m.b * invDet,
     c: -m.c * invDet,
-    d: m.a * invDet,
+    d:  m.a * invDet,
     e: (m.c * m.f - m.d * m.e) * invDet,
     f: (m.b * m.e - m.a * m.f) * invDet,
   };
@@ -40,3 +40,6 @@ export const apply = (m: Matrix, x: number, y: number) => ({
 export function getScale(m: Matrix): number {
   return Math.hypot(m.a, m.b) || 1;
 }
+
+export const getScaleX = (m: Matrix): number => Math.hypot(m.a, m.b) || 1;
+export const getScaleY = (m: Matrix): number => Math.hypot(m.c, m.d) || 1;
