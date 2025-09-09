@@ -1,13 +1,13 @@
 <!doctype html>
 <meta charset="utf-8" />
-<title>D3 + Canvas: High-density Line</title>
+<title>D3 + Canvas: High-density Line (with Downsampling Toggle)</title>
 <style>
   :root { color-scheme: light dark; }
   body { margin: 0; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
   #wrap { width: 100%; max-width: 1000px; margin: 24px auto; padding: 0 12px; }
   .chart { position: relative; user-select: none; }
   .axis path, .axis line { shape-rendering: crispEdges; }
-  .hud { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+  .hud { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
   .hud label { display: inline-flex; gap: 6px; align-items: center; }
   .legend { opacity: .7; }
 </style>
@@ -15,8 +15,12 @@
 <div id="wrap">
   <div class="hud">
     <label><input id="autoY" type="checkbox" checked /> авто-масштаб Y при зуме</label>
+    <label><input id="useDS" type="checkbox" checked /> даунсемплинг</label>
+    <label class="rate">агрессивность: <input id="dsRate" type="range" min="1" max="16" step="1" value="1" /> <b id="dsRateLabel">1px/бин</b></label>
     <span class="legend">кол-во точек: <b id="count">—</b> · отображается: <b id="visible">—</b></span>
   </div>
+  <div id="chart" class="chart"></div>
+</div>
   <div id="chart" class="chart"></div>
 </div>
 
@@ -26,7 +30,8 @@
   // ==== Конфиг ====
   const SIZE = { width: 960, height: 420 };
   const MARGIN = { top: 16, right: 20, bottom: 28, left: 48 };
-  const AUTO_RESCALE_Y = true; // можно выключить, если нужен фиксированный Y
+  const AUTO_RESCALE_Y = true; // включено по умолчанию
+  const DEFAULT_USE_DS = true; // даунсемплинг включен по умолчанию
   const LINE_WIDTH = 1;
   const LINE_COLOR = "#2474ff";
   const BG_COLOR = getComputedStyle(document.body).backgroundColor || "#fff";
@@ -104,7 +109,7 @@
 
   // ==== Децимация: min/max на колонку пикселя ====
   // Сохраняем пики, не теряя экстремумы (в отличие от простого "каждый k-й").
-  function decimateMinMaxPerPixel(src, xScale, accessorX = d => d.x, accessorY = d => d.y) {
+  function decimateMinMaxPerPixel(src, xScale, binPx = 1, accessorX = d => d.x, accessorY = d => d.y) {
     const leftPx = MARGIN.left;
     const rightPx = width - MARGIN.right;
     const innerWidth = rightPx - leftPx;
@@ -114,48 +119,44 @@
     const domainSpan = xEnd - xStart;
     if (domainSpan === 0) return src;
 
-    // Предварительно ограничим итерацию только видимым диапазоном для скорости
-    // (данные отсортированы по x → можно сделать бинарный поиск; для простоты — линейно).
-    // Если твои данные гарантированно монотонны по x, стоит сделать настоящий бинпоиск.
+    const binsCount = Math.max(1, Math.floor(innerWidth / Math.max(1, binPx)));
+
+    // Предварительно ограничим итерацию только видимым диапазоном
     let i0 = 0, i1 = src.length - 1;
-    // Грубая оценка на основе индексов, если x — это индекс
     if (typeof accessorX(src[0]) === "number" && accessorX(src[src.length - 1]) - accessorX(src[0]) + 1 === src.length) {
       const base = accessorX(src[0]);
       i0 = Math.max(0, Math.floor(xStart - base));
       i1 = Math.min(src.length - 1, Math.ceil(xEnd - base));
     }
 
-    const binsMin = new Array(innerWidth);
-    const binsMax = new Array(innerWidth);
+    const binsMin = new Array(binsCount);
+    const binsMax = new Array(binsCount);
 
     for (let i = i0; i <= i1; i++) {
       const d = src[i];
       const vx = accessorX(d);
       if (vx < xStart || vx > xEnd) continue;
-      const px = Math.floor((vx - xStart) / domainSpan * (innerWidth - 1));
-      const idx = px; // [0 .. innerWidth-1]
+      const pos = (vx - xStart) / domainSpan * (innerWidth - 1); // позиция в пикселях внутри окна
+      const b = Math.min(binsCount - 1, Math.max(0, Math.floor(pos / Math.max(1, binPx))));
       const vy = accessorY(d);
 
-      // min
-      const bmin = binsMin[idx];
-      if (!bmin || vy < bmin.vy) binsMin[idx] = { d, vy };
+      const bmin = binsMin[b];
+      if (!bmin || vy < bmin.vy) binsMin[b] = { d, vy };
 
-      // max
-      const bmax = binsMax[idx];
-      if (!bmax || vy > bmax.vy) binsMax[idx] = { d, vy };
+      const bmax = binsMax[b];
+      if (!bmax || vy > bmax.vy) binsMax[b] = { d, vy };
     }
 
-    // Собираем точки в порядке слева направо, интерливинг min/max
     const result = [];
-    for (let px = 0; px < innerWidth; px++) {
-      const bmin = binsMin[px];
-      const bmax = binsMax[px];
-      if (!bmin && !bmax) continue;
-      if (!bmin || !bmax || bmin.d === bmax.d) {
-        result.push((bmin || bmax).d);
+    for (let b = 0; b < binsCount; b++) {
+      const mn = binsMin[b];
+      const mx = binsMax[b];
+      if (!mn && !mx) continue;
+      if (!mn || !mx || mn.d === mx.d) {
+        result.push((mn || mx).d);
       } else {
-        // порядок min→max сохраняет экстремумы в колонке
-        result.push(bmin.d, bmax.d);
+        // порядок min→max сохраняет экстремумы в бине
+        result.push(mn.d, mx.d);
       }
     }
     return result.length ? result : src;
@@ -174,7 +175,6 @@
     }
     ctx.restore(); // возвращает масштаб dpi, заданный ранее ctx.scale(dpi, dpi)
   }
-
 
   function drawLine(points) {
     if (!points.length) return;
@@ -220,36 +220,71 @@
     raf = requestAnimationFrame(render);
   }
 
+  // Узлы управления
+  const autoY = document.getElementById("autoY");
+  autoY.checked = AUTO_RESCALE_Y;
+  autoY.addEventListener("change", scheduleRender);
+
+  const useDS = document.getElementById("useDS");
+  useDS.checked = DEFAULT_USE_DS;
+
+  const dsRate = document.getElementById("dsRate");
+  const dsRateLabel = document.getElementById("dsRateLabel");
+
+  function updateRateLabel() {
+    dsRateLabel.textContent = `${dsRate.value}px/бин`;
+  }
+  updateRateLabel();
+
+  useDS.addEventListener("change", () => {
+    dsRate.disabled = !useDS.checked;
+    scheduleRender();
+  });
+
+  dsRate.addEventListener("input", () => {
+    updateRateLabel();
+    scheduleRender();
+  });
+
+  dsRate.disabled = !useDS.checked;
+
   function render() {
     clearCanvas();
 
-    const reduced = data.length > 5000
-      ? decimateMinMaxPerPixel(data, x)
-      : data;
-
-    if (autoY.checked) {
-      y.domain(computeVisibleYDomain(reduced)).nice();
+    let points;
+    if (useDS.checked) {
+      // Даунсемплинг под текущий домен X
+      points = decimateMinMaxPerPixel(
+        data,
+        x,
+        Math.max(1, parseInt(dsRate.value, 10) || 1)
+      );
+    } else {
+      // Без даунсемплинга (предупреждение: на полном обзоре будет тяжело)
+      const [xStart, xEnd] = x.domain();
+      points = data.filter(d => d.x >= xStart && d.x <= xEnd);
     }
 
-    // Оси должны обновляться на каждом рендере,
-    // иначе при зуме X будет "старой".
+    if (autoY.checked) {
+      y.domain(computeVisibleYDomain(points)).nice();
+    } else {
+      y.domain(y0.domain()); // фиксированный Y при отключенном авто-рескейле
+    }
+
+    // Оси должны обновляться на каждом рендере
     drawAxes();
 
-    d3.select("#visible").text(reduced.length.toLocaleString("en-US"));
-    drawLine(reduced);
+    d3.select("#visible").text(points.length.toLocaleString("en-US"));
+    drawLine(points);
   }
 
   // ==== Зум/пан ====
-  const autoY = document.getElementById("autoY");
-  autoY.checked = AUTO_RESCALE_Y;
-  autoY.addEventListener("change", () => scheduleRender());
-
   const zoom = d3.zoom()
     .scaleExtent([1, 10_000])
     .translateExtent([[MARGIN.left, MARGIN.top], [width - MARGIN.right, height - MARGIN.bottom]])
     .on("zoom", (ev) => {
       const t = ev.transform;
-      // только X-зум/пан; Y оставляем как есть (или пересчитываем автоматом по флагу)
+      // только X-зум/пан
       const zx = t.rescaleX(x0);
       x.domain(zx.domain());
       scheduleRender();
@@ -269,7 +304,5 @@
   drawAxes();
   render();
 
-  // Респонсив при ресайзе контейнера (по желанию можно убрать)
-  // Здесь для краткости не пересоздаём канвас, но можно адаптировать под гибкую ширину.
-
+  // (Опционально) Респонсив при ресайзе контейнера — опущен для краткости
 </script>
