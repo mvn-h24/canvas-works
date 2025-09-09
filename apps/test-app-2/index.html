@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8" />
-<title>D3 + Canvas: High-density Line (with Downsampling Toggle)</title>
+<title>D3 + Canvas: High-density Line (with Downsampling Toggle + Count Input)</title>
 <style>
   :root { color-scheme: light dark; }
   body { margin: 0; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
@@ -10,6 +10,8 @@
   .hud { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
   .hud label { display: inline-flex; gap: 6px; align-items: center; }
   .legend { opacity: .7; }
+  input[type="number"] { width: 10ch; }
+  button { padding: 4px 10px; }
 </style>
 
 <div id="wrap">
@@ -17,10 +19,10 @@
     <label><input id="autoY" type="checkbox" checked /> авто-масштаб Y при зуме</label>
     <label><input id="useDS" type="checkbox" checked /> даунсемплинг</label>
     <label class="rate">агрессивность: <input id="dsRate" type="range" min="1" max="16" step="1" value="1" /> <b id="dsRateLabel">1px/бин</b></label>
+    <label>точек: <input id="nInput" type="number" min="1000" max="5000000" step="10000" value="500000" /></label>
+    <button id="regen">Перегенерировать</button>
     <span class="legend">кол-во точек: <b id="count">—</b> · отображается: <b id="visible">—</b></span>
   </div>
-  <div id="chart" class="chart"></div>
-</div>
   <div id="chart" class="chart"></div>
 </div>
 
@@ -35,23 +37,7 @@
   const LINE_WIDTH = 1;
   const LINE_COLOR = "#2474ff";
   const BG_COLOR = getComputedStyle(document.body).backgroundColor || "#fff";
-
-  // ==== Демо-данные (замени на свои: data = [{x:number|Date, y:number}, ...]) ====
-  // Сгенерим полмиллиона точек (можно и больше).
-  const N = 5e5;
-  const data = generateData(N);
-  d3.select("#count").text(N.toLocaleString("en-US"));
-
-  function generateData(n) {
-    const out = new Array(n);
-    let y = 0;
-    for (let i = 0; i < n; i++) {
-      // x как индекс; y — шум+синус, имитируем "живую" линию
-      y += Math.sin(i * 0.015) * 0.3 + (Math.random() - 0.5) * 0.2;
-      out[i] = { x: i, y };
-    }
-    return out;
-  }
+  const MAX_POINTS = 5_000_000;
 
   // ==== Базовая сцена ====
   const dpi = Math.max(1, Math.floor(window.devicePixelRatio || 1));
@@ -80,17 +66,11 @@
     .style("inset", 0);
 
   // ==== Шкалы ====
-  // Для времени используй d3.scaleTime и Date в data.x
-  const x = d3.scaleLinear()
-    .domain(d3.extent(data, d => d.x))
-    .range([MARGIN.left, width - MARGIN.right]);
+  const x = d3.scaleLinear().range([MARGIN.left, width - MARGIN.right]);
+  const y = d3.scaleLinear().range([height - MARGIN.bottom, MARGIN.top]);
 
-  const y = d3.scaleLinear()
-    .domain(d3.extent(data, d => d.y))
-    .nice()
-    .range([height - MARGIN.bottom, MARGIN.top]);
-
-  const x0 = x.copy(); // оригинал для rescale при зуме
+  // Оригиналы шкал (для rescale при зуме) — домен будем обновлять при перегенерации данных
+  const x0 = x.copy();
   const y0 = y.copy();
 
   // ==== Оси ====
@@ -107,8 +87,54 @@
     gy.call(d3.axisLeft(y).ticks(Math.floor(height / 50)));
   }
 
+  // ==== Демо-данные ====
+  function generateData(n) {
+    const out = new Array(n);
+    let y = 0;
+    for (let i = 0; i < n; i++) {
+      y += Math.sin(i * 0.015) * 0.3 + (Math.random() - 0.5) * 0.2;
+      out[i] = { x: i, y };
+    }
+    return out;
+  }
+
+  let data = [];
+  const nInput = document.getElementById("nInput");
+  const regenBtn = document.getElementById("regen");
+  const countEl = d3.select("#count");
+  const visibleEl = d3.select("#visible");
+
+  function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
+
+  function setData(n) {
+    const N = clamp(parseInt(n, 10) || 0, +nInput.min, MAX_POINTS);
+    nInput.value = String(N);
+
+    // генерим
+    data = generateData(N);
+    countEl.text(N.toLocaleString("en-US"));
+
+    // обновляем домены шкал и их "базу"
+    x.domain(d3.extent(data, d => d.x));
+    x0.domain(x.domain());
+
+    const yDom = d3.extent(data, d => d.y);
+    if (yDom[0] === yDom[1]) {
+      const eps = Math.abs(yDom[0] || 1) * 1e-6;
+      yDom[0] -= eps; yDom[1] += eps;
+    }
+    y.domain(yDom).nice();
+    y0.domain(y.domain());
+
+    // сбрасываем зум к исходному виду, чтобы базовые домены совпали
+    overlay.call(zoom.transform, d3.zoomIdentity);
+
+    // перерисовываем
+    drawAxes();
+    scheduleRender();
+  }
+
   // ==== Децимация: min/max на колонку пикселя ====
-  // Сохраняем пики, не теряя экстремумы (в отличие от простого "каждый k-й").
   function decimateMinMaxPerPixel(src, xScale, binPx = 1, accessorX = d => d.x, accessorY = d => d.y) {
     const leftPx = MARGIN.left;
     const rightPx = width - MARGIN.right;
@@ -123,7 +149,7 @@
 
     // Предварительно ограничим итерацию только видимым диапазоном
     let i0 = 0, i1 = src.length - 1;
-    if (typeof accessorX(src[0]) === "number" && accessorX(src[src.length - 1]) - accessorX(src[0]) + 1 === src.length) {
+    if (src.length >= 2 && typeof accessorX(src[0]) === "number" && accessorX(src[src.length - 1]) - accessorX(src[0]) + 1 === src.length) {
       const base = accessorX(src[0]);
       i0 = Math.max(0, Math.floor(xStart - base));
       i1 = Math.min(src.length - 1, Math.ceil(xEnd - base));
@@ -136,7 +162,7 @@
       const d = src[i];
       const vx = accessorX(d);
       if (vx < xStart || vx > xEnd) continue;
-      const pos = (vx - xStart) / domainSpan * (innerWidth - 1); // позиция в пикселях внутри окна
+      const pos = (vx - xStart) / domainSpan * (innerWidth - 1);
       const b = Math.min(binsCount - 1, Math.max(0, Math.floor(pos / Math.max(1, binPx))));
       const vy = accessorY(d);
 
@@ -155,7 +181,6 @@
       if (!mn || !mx || mn.d === mx.d) {
         result.push((mn || mx).d);
       } else {
-        // порядок min→max сохраняет экстремумы в бине
         result.push(mn.d, mx.d);
       }
     }
@@ -164,8 +189,6 @@
 
   // ==== Рисование линии ====
   function clearCanvas() {
-    // Чистим ВЕСЬ буфер от (0,0) до (canvas.width, canvas.height)
-    // при единичной матрице, затем возвращаем масштаб dpi.
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -173,7 +196,7 @@
       ctx.fillStyle = BG_COLOR;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
-    ctx.restore(); // возвращает масштаб dpi, заданный ранее ctx.scale(dpi, dpi)
+    ctx.restore();
   }
 
   function drawLine(points) {
@@ -206,7 +229,6 @@
       if (v > ymax) ymax = v;
     }
     if (ymin === ymax) {
-      // избегаем нулевой высоты
       const eps = Math.abs(ymin || 1) * 1e-6;
       ymin -= eps; ymax += eps;
     }
@@ -230,10 +252,7 @@
 
   const dsRate = document.getElementById("dsRate");
   const dsRateLabel = document.getElementById("dsRateLabel");
-
-  function updateRateLabel() {
-    dsRateLabel.textContent = `${dsRate.value}px/бин`;
-  }
+  function updateRateLabel() { dsRateLabel.textContent = `${dsRate.value}px/бин`; }
   updateRateLabel();
 
   useDS.addEventListener("change", () => {
@@ -245,22 +264,20 @@
     updateRateLabel();
     scheduleRender();
   });
-
   dsRate.disabled = !useDS.checked;
 
+  // ==== Рендер ====
   function render() {
     clearCanvas();
 
     let points;
     if (useDS.checked) {
-      // Даунсемплинг под текущий домен X
       points = decimateMinMaxPerPixel(
         data,
         x,
         Math.max(1, parseInt(dsRate.value, 10) || 1)
       );
     } else {
-      // Без даунсемплинга (предупреждение: на полном обзоре будет тяжело)
       const [xStart, xEnd] = x.domain();
       points = data.filter(d => d.x >= xStart && d.x <= xEnd);
     }
@@ -271,10 +288,8 @@
       y.domain(y0.domain()); // фиксированный Y при отключенном авто-рескейле
     }
 
-    // Оси должны обновляться на каждом рендере
     drawAxes();
-
-    d3.select("#visible").text(points.length.toLocaleString("en-US"));
+    visibleEl.text(points.length.toLocaleString("en-US"));
     drawLine(points);
   }
 
@@ -284,14 +299,13 @@
     .translateExtent([[MARGIN.left, MARGIN.top], [width - MARGIN.right, height - MARGIN.bottom]])
     .on("zoom", (ev) => {
       const t = ev.transform;
-      // только X-зум/пан
       const zx = t.rescaleX(x0);
       x.domain(zx.domain());
       scheduleRender();
     });
 
   // Прямоугольник-оверлей под зум
-  svg.append("rect")
+  const overlay = svg.append("rect")
     .attr("x", MARGIN.left)
     .attr("y", MARGIN.top)
     .attr("width", width - MARGIN.left - MARGIN.right)
@@ -300,9 +314,17 @@
     .style("cursor", "grab")
     .call(zoom);
 
-  // Первичный рендер
+  // ==== Инициализация ====
+  // стартуем с значения из поля ввода
+  setData(nInput.value);
+
+  // обработчики генерации
+  regenBtn.addEventListener("click", () => setData(nInput.value));
+  nInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") setData(nInput.value);
+  });
+
+  // Первичный рендер (на случай, если setData уже вызвал scheduleRender до осей)
   drawAxes();
   render();
-
-  // (Опционально) Респонсив при ресайзе контейнера — опущен для краткости
 </script>
