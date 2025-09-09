@@ -1,0 +1,275 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>D3 + Canvas: High-density Line</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  #wrap { width: 100%; max-width: 1000px; margin: 24px auto; padding: 0 12px; }
+  .chart { position: relative; user-select: none; }
+  .axis path, .axis line { shape-rendering: crispEdges; }
+  .hud { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+  .hud label { display: inline-flex; gap: 6px; align-items: center; }
+  .legend { opacity: .7; }
+</style>
+
+<div id="wrap">
+  <div class="hud">
+    <label><input id="autoY" type="checkbox" checked /> авто-масштаб Y при зуме</label>
+    <span class="legend">кол-во точек: <b id="count">—</b> · отображается: <b id="visible">—</b></span>
+  </div>
+  <div id="chart" class="chart"></div>
+</div>
+
+<script type="module">
+  import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+  // ==== Конфиг ====
+  const SIZE = { width: 960, height: 420 };
+  const MARGIN = { top: 16, right: 20, bottom: 28, left: 48 };
+  const AUTO_RESCALE_Y = true; // можно выключить, если нужен фиксированный Y
+  const LINE_WIDTH = 1;
+  const LINE_COLOR = "#2474ff";
+  const BG_COLOR = getComputedStyle(document.body).backgroundColor || "#fff";
+
+  // ==== Демо-данные (замени на свои: data = [{x:number|Date, y:number}, ...]) ====
+  // Сгенерим полмиллиона точек (можно и больше).
+  const N = 5e5;
+  const data = generateData(N);
+  d3.select("#count").text(N.toLocaleString("en-US"));
+
+  function generateData(n) {
+    const out = new Array(n);
+    let y = 0;
+    for (let i = 0; i < n; i++) {
+      // x как индекс; y — шум+синус, имитируем "живую" линию
+      y += Math.sin(i * 0.015) * 0.3 + (Math.random() - 0.5) * 0.2;
+      out[i] = { x: i, y };
+    }
+    return out;
+  }
+
+  // ==== Базовая сцена ====
+  const dpi = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+  const width = SIZE.width;
+  const height = SIZE.height;
+
+  const chart = d3.select("#chart")
+    .style("width", `${width}px`)
+    .style("height", `${height}px`);
+
+  const canvas = chart.append("canvas")
+    .attr("width", width * dpi)
+    .attr("height", height * dpi)
+    .style("width", `${width}px`)
+    .style("height", `${height}px`)
+    .node();
+
+  const ctx = canvas.getContext("2d", { desynchronized: true });
+  ctx.scale(dpi, dpi);
+
+  // SVG поверх — только для осей и захвата событий зума
+  const svg = chart.append("svg")
+    .attr("width", width)
+    .attr("height", height)
+    .style("position", "absolute")
+    .style("inset", 0);
+
+  // ==== Шкалы ====
+  // Для времени используй d3.scaleTime и Date в data.x
+  const x = d3.scaleLinear()
+    .domain(d3.extent(data, d => d.x))
+    .range([MARGIN.left, width - MARGIN.right]);
+
+  const y = d3.scaleLinear()
+    .domain(d3.extent(data, d => d.y))
+    .nice()
+    .range([height - MARGIN.bottom, MARGIN.top]);
+
+  const x0 = x.copy(); // оригинал для rescale при зуме
+  const y0 = y.copy();
+
+  // ==== Оси ====
+  const gx = svg.append("g")
+    .attr("class", "axis x")
+    .attr("transform", `translate(0,${height - MARGIN.bottom})`);
+
+  const gy = svg.append("g")
+    .attr("class", "axis y")
+    .attr("transform", `translate(${MARGIN.left},0)`);
+
+  function drawAxes() {
+    gx.call(d3.axisBottom(x).ticks(Math.floor(width / 80)));
+    gy.call(d3.axisLeft(y).ticks(Math.floor(height / 50)));
+  }
+
+  // ==== Децимация: min/max на колонку пикселя ====
+  // Сохраняем пики, не теряя экстремумы (в отличие от простого "каждый k-й").
+  function decimateMinMaxPerPixel(src, xScale, accessorX = d => d.x, accessorY = d => d.y) {
+    const leftPx = MARGIN.left;
+    const rightPx = width - MARGIN.right;
+    const innerWidth = rightPx - leftPx;
+    if (innerWidth <= 0) return src;
+
+    const [xStart, xEnd] = xScale.domain();
+    const domainSpan = xEnd - xStart;
+    if (domainSpan === 0) return src;
+
+    // Предварительно ограничим итерацию только видимым диапазоном для скорости
+    // (данные отсортированы по x → можно сделать бинарный поиск; для простоты — линейно).
+    // Если твои данные гарантированно монотонны по x, стоит сделать настоящий бинпоиск.
+    let i0 = 0, i1 = src.length - 1;
+    // Грубая оценка на основе индексов, если x — это индекс
+    if (typeof accessorX(src[0]) === "number" && accessorX(src[src.length - 1]) - accessorX(src[0]) + 1 === src.length) {
+      const base = accessorX(src[0]);
+      i0 = Math.max(0, Math.floor(xStart - base));
+      i1 = Math.min(src.length - 1, Math.ceil(xEnd - base));
+    }
+
+    const binsMin = new Array(innerWidth);
+    const binsMax = new Array(innerWidth);
+
+    for (let i = i0; i <= i1; i++) {
+      const d = src[i];
+      const vx = accessorX(d);
+      if (vx < xStart || vx > xEnd) continue;
+      const px = Math.floor((vx - xStart) / domainSpan * (innerWidth - 1));
+      const idx = px; // [0 .. innerWidth-1]
+      const vy = accessorY(d);
+
+      // min
+      const bmin = binsMin[idx];
+      if (!bmin || vy < bmin.vy) binsMin[idx] = { d, vy };
+
+      // max
+      const bmax = binsMax[idx];
+      if (!bmax || vy > bmax.vy) binsMax[idx] = { d, vy };
+    }
+
+    // Собираем точки в порядке слева направо, интерливинг min/max
+    const result = [];
+    for (let px = 0; px < innerWidth; px++) {
+      const bmin = binsMin[px];
+      const bmax = binsMax[px];
+      if (!bmin && !bmax) continue;
+      if (!bmin || !bmax || bmin.d === bmax.d) {
+        result.push((bmin || bmax).d);
+      } else {
+        // порядок min→max сохраняет экстремумы в колонке
+        result.push(bmin.d, bmax.d);
+      }
+    }
+    return result.length ? result : src;
+  }
+
+  // ==== Рисование линии ====
+  function clearCanvas() {
+    // Чистим ВЕСЬ буфер от (0,0) до (canvas.width, canvas.height)
+    // при единичной матрице, затем возвращаем масштаб dpi.
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (BG_COLOR) {
+      ctx.fillStyle = BG_COLOR;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    ctx.restore(); // возвращает масштаб dpi, заданный ранее ctx.scale(dpi, dpi)
+  }
+
+
+  function drawLine(points) {
+    if (!points.length) return;
+
+    ctx.beginPath();
+    let moved = false;
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      const cx = x(p.x);
+      const cy = y(p.y);
+      if (!moved) {
+        ctx.moveTo(cx, cy);
+        moved = true;
+      } else {
+        ctx.lineTo(cx, cy);
+      }
+    }
+    ctx.lineWidth = LINE_WIDTH;
+    ctx.strokeStyle = LINE_COLOR;
+    ctx.stroke();
+  }
+
+  function computeVisibleYDomain(points) {
+    if (!points.length) return y.domain();
+    let ymin = +Infinity, ymax = -Infinity;
+    for (let i = 0; i < points.length; i++) {
+      const v = points[i].y;
+      if (v < ymin) ymin = v;
+      if (v > ymax) ymax = v;
+    }
+    if (ymin === ymax) {
+      // избегаем нулевой высоты
+      const eps = Math.abs(ymin || 1) * 1e-6;
+      ymin -= eps; ymax += eps;
+    }
+    return [ymin, ymax];
+  }
+
+  // RAF-батчинг перерисовок
+  let raf = 0;
+  function scheduleRender() {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(render);
+  }
+
+  function render() {
+    clearCanvas();
+
+    const reduced = data.length > 5000
+      ? decimateMinMaxPerPixel(data, x)
+      : data;
+
+    if (autoY.checked) {
+      y.domain(computeVisibleYDomain(reduced)).nice();
+    }
+
+    // Оси должны обновляться на каждом рендере,
+    // иначе при зуме X будет "старой".
+    drawAxes();
+
+    d3.select("#visible").text(reduced.length.toLocaleString("en-US"));
+    drawLine(reduced);
+  }
+
+  // ==== Зум/пан ====
+  const autoY = document.getElementById("autoY");
+  autoY.checked = AUTO_RESCALE_Y;
+  autoY.addEventListener("change", () => scheduleRender());
+
+  const zoom = d3.zoom()
+    .scaleExtent([1, 10_000])
+    .translateExtent([[MARGIN.left, MARGIN.top], [width - MARGIN.right, height - MARGIN.bottom]])
+    .on("zoom", (ev) => {
+      const t = ev.transform;
+      // только X-зум/пан; Y оставляем как есть (или пересчитываем автоматом по флагу)
+      const zx = t.rescaleX(x0);
+      x.domain(zx.domain());
+      scheduleRender();
+    });
+
+  // Прямоугольник-оверлей под зум
+  svg.append("rect")
+    .attr("x", MARGIN.left)
+    .attr("y", MARGIN.top)
+    .attr("width", width - MARGIN.left - MARGIN.right)
+    .attr("height", height - MARGIN.top - MARGIN.bottom)
+    .style("fill", "transparent")
+    .style("cursor", "grab")
+    .call(zoom);
+
+  // Первичный рендер
+  drawAxes();
+  render();
+
+  // Респонсив при ресайзе контейнера (по желанию можно убрать)
+  // Здесь для краткости не пересоздаём канвас, но можно адаптировать под гибкую ширину.
+
+</script>

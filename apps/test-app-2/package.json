@@ -1,0 +1,8 @@
+{
+  "name": "@canvas-works/test-app-2",
+  "version": "0.0.1",
+  "private": true,
+  "nx": {
+    "name": "test-app-2"
+  }
+}

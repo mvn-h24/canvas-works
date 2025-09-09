@@ -101,6 +101,12 @@
       "library": {
         "unitTestRunner": "jest"
       }
+    },
+    "@nx/web:application": {
+      "style": "css",
+      "linter": "none",
+      "unitTestRunner": "none",
+      "e2eTestRunner": "none"
     }
   }
 }

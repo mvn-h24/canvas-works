@@ -11,6 +11,9 @@
     },
     {
       "path": "./libs/canvas-works"
+    },
+    {
+      "path": "./apps/test-app-2"
     }
   ]
 }
