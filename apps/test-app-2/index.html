@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8" />
-<title>D3 + Canvas: High-density Line (with Downsampling Toggle + Count Input)</title>
+<title>D3 + Canvas: High-density Line (Downsampling + Interpolation Selector)</title>
 <style>
   :root { color-scheme: light dark; }
   body { margin: 0; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
@@ -12,6 +12,7 @@
   .legend { opacity: .7; }
   input[type="number"] { width: 10ch; }
   button { padding: 4px 10px; }
+  .hidden { display: none; }
 </style>
 
 <div id="wrap">
@@ -19,6 +20,28 @@
     <label><input id="autoY" type="checkbox" checked /> авто-масштаб Y при зуме</label>
     <label><input id="useDS" type="checkbox" checked /> даунсемплинг</label>
     <label class="rate">агрессивность: <input id="dsRate" type="range" min="1" max="16" step="1" value="1" /> <b id="dsRateLabel">1px/бин</b></label>
+
+    <label><input id="useInterp" type="checkbox" /> интерполяция</label>
+    <label>тип:
+      <select id="curveSelect" disabled>
+        <option value="catmullRom">Catmull–Rom</option>
+        <option value="monotoneX">Monotone X</option>
+        <option value="natural">Natural</option>
+        <option value="basis">Basis</option>
+        <option value="cardinal">Cardinal</option>
+        <option value="bundle">Bundle</option>
+        <option value="bumpX">Bump X</option>
+        <option value="step">Step</option>
+        <option value="stepBefore">Step Before</option>
+        <option value="stepAfter">Step After</option>
+        <option value="linear">Linear</option>
+      </select>
+    </label>
+
+    <label id="alphaWrap" class="hidden">α: <input id="alphaSlider" type="range" min="0" max="1" step="0.05" value="0.5" /> <b id="alphaLabel">0.50</b></label>
+    <label id="tensionWrap" class="hidden">τ: <input id="tensionSlider" type="range" min="0" max="1" step="0.05" value="0.00" /> <b id="tensionLabel">0.00</b></label>
+    <label id="betaWrap" class="hidden">β: <input id="betaSlider" type="range" min="0" max="1" step="0.05" value="0.85" /> <b id="betaLabel">0.85</b></label>
+
     <label>точек: <input id="nInput" type="number" min="1000" max="5000000" step="10000" value="500000" /></label>
     <button id="regen">Перегенерировать</button>
     <span class="legend">кол-во точек: <b id="count">—</b> · отображается: <b id="visible">—</b></span>
@@ -32,8 +55,10 @@
   // ==== Конфиг ====
   const SIZE = { width: 960, height: 420 };
   const MARGIN = { top: 16, right: 20, bottom: 28, left: 48 };
-  const AUTO_RESCALE_Y = true; // включено по умолчанию
-  const DEFAULT_USE_DS = true; // даунсемплинг включен по умолчанию
+  const AUTO_RESCALE_Y = true;           // по умолчанию включено
+  const DEFAULT_USE_DS = true;           // даунсемплинг включен
+  const DEFAULT_USE_INTERP = false;      // интерполяция выключена
+  const DEFAULT_CURVE = 'catmullRom';    // дефолт (когда включишь интерполяцию)
   const LINE_WIDTH = 1;
   const LINE_COLOR = "#2474ff";
   const BG_COLOR = getComputedStyle(document.body).backgroundColor || "#fff";
@@ -69,18 +94,12 @@
   const x = d3.scaleLinear().range([MARGIN.left, width - MARGIN.right]);
   const y = d3.scaleLinear().range([height - MARGIN.bottom, MARGIN.top]);
 
-  // Оригиналы шкал (для rescale при зуме) — домен будем обновлять при перегенерации данных
   const x0 = x.copy();
   const y0 = y.copy();
 
   // ==== Оси ====
-  const gx = svg.append("g")
-    .attr("class", "axis x")
-    .attr("transform", `translate(0,${height - MARGIN.bottom})`);
-
-  const gy = svg.append("g")
-    .attr("class", "axis y")
-    .attr("transform", `translate(${MARGIN.left},0)`);
+  const gx = svg.append("g").attr("class", "axis x").attr("transform", `translate(0,${height - MARGIN.bottom})`);
+  const gy = svg.append("g").attr("class", "axis y").attr("transform", `translate(${MARGIN.left},0)`);
 
   function drawAxes() {
     gx.call(d3.axisBottom(x).ticks(Math.floor(width / 80)));
@@ -90,10 +109,10 @@
   // ==== Демо-данные ====
   function generateData(n) {
     const out = new Array(n);
-    let y = 0;
+    let yv = 0;
     for (let i = 0; i < n; i++) {
-      y += Math.sin(i * 0.015) * 0.3 + (Math.random() - 0.5) * 0.2;
-      out[i] = { x: i, y };
+      yv += Math.sin(i * 0.015) * 0.3 + (Math.random() - 0.5) * 0.2;
+      out[i] = { x: i, y: yv };
     }
     return out;
   }
@@ -110,11 +129,9 @@
     const N = clamp(parseInt(n, 10) || 0, +nInput.min, MAX_POINTS);
     nInput.value = String(N);
 
-    // генерим
     data = generateData(N);
     countEl.text(N.toLocaleString("en-US"));
 
-    // обновляем домены шкал и их "базу"
     x.domain(d3.extent(data, d => d.x));
     x0.domain(x.domain());
 
@@ -126,10 +143,8 @@
     y.domain(yDom).nice();
     y0.domain(y.domain());
 
-    // сбрасываем зум к исходному виду, чтобы базовые домены совпали
     overlay.call(zoom.transform, d3.zoomIdentity);
 
-    // перерисовываем
     drawAxes();
     scheduleRender();
   }
@@ -147,7 +162,7 @@
 
     const binsCount = Math.max(1, Math.floor(innerWidth / Math.max(1, binPx)));
 
-    // Предварительно ограничим итерацию только видимым диапазоном
+    // Предварительное ограничение итерации только видимым диапазоном
     let i0 = 0, i1 = src.length - 1;
     if (src.length >= 2 && typeof accessorX(src[0]) === "number" && accessorX(src[src.length - 1]) - accessorX(src[0]) + 1 === src.length) {
       const base = accessorX(src[0]);
@@ -187,7 +202,12 @@
     return result.length ? result : src;
   }
 
-  // ==== Рисование линии ====
+  // ==== Линия через d3-shape с Canvas контекстом ====
+  const lineGen = d3.line()
+    .x(d => x(d.x))
+    .y(d => y(d.y))
+    .context(ctx);
+
   function clearCanvas() {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -201,20 +221,8 @@
 
   function drawLine(points) {
     if (!points.length) return;
-
     ctx.beginPath();
-    let moved = false;
-    for (let i = 0; i < points.length; i++) {
-      const p = points[i];
-      const cx = x(p.x);
-      const cy = y(p.y);
-      if (!moved) {
-        ctx.moveTo(cx, cy);
-        moved = true;
-      } else {
-        ctx.lineTo(cx, cy);
-      }
-    }
+    lineGen(points);
     ctx.lineWidth = LINE_WIDTH;
     ctx.strokeStyle = LINE_COLOR;
     ctx.stroke();
@@ -235,14 +243,14 @@
     return [ymin, ymax];
   }
 
-  // RAF-батчинг перерисовок
+  // RAF-батчинг
   let raf = 0;
   function scheduleRender() {
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(render);
   }
 
-  // Узлы управления
+  // ==== UI элементы ====
   const autoY = document.getElementById("autoY");
   autoY.checked = AUTO_RESCALE_Y;
   autoY.addEventListener("change", scheduleRender);
@@ -255,16 +263,81 @@
   function updateRateLabel() { dsRateLabel.textContent = `${dsRate.value}px/бин`; }
   updateRateLabel();
 
-  useDS.addEventListener("change", () => {
-    dsRate.disabled = !useDS.checked;
-    scheduleRender();
-  });
-
-  dsRate.addEventListener("input", () => {
-    updateRateLabel();
-    scheduleRender();
-  });
+  useDS.addEventListener("change", () => { dsRate.disabled = !useDS.checked; scheduleRender(); });
+  dsRate.addEventListener("input", () => { updateRateLabel(); scheduleRender(); });
   dsRate.disabled = !useDS.checked;
+
+  const useInterp = document.getElementById("useInterp");
+  useInterp.checked = DEFAULT_USE_INTERP;
+
+  const curveSelect = document.getElementById("curveSelect");
+  curveSelect.value = DEFAULT_CURVE;
+
+  const alphaWrap = document.getElementById("alphaWrap");
+  const tensionWrap = document.getElementById("tensionWrap");
+  const betaWrap = document.getElementById("betaWrap");
+
+  const alphaSlider = document.getElementById("alphaSlider");
+  const alphaLabel = document.getElementById("alphaLabel");
+  const tensionSlider = document.getElementById("tensionSlider");
+  const tensionLabel = document.getElementById("tensionLabel");
+  const betaSlider = document.getElementById("betaSlider");
+  const betaLabel = document.getElementById("betaLabel");
+
+  function fmt2(v) { return (+v).toFixed(2); }
+
+  function updateInterpControlsState() {
+    const enabled = useInterp.checked;
+    curveSelect.disabled = !enabled;
+    // показываем/скрываем слайдеры по выбранной кривой
+    const sel = curveSelect.value;
+    alphaWrap.classList.toggle('hidden', !(enabled && sel === 'catmullRom'));
+    tensionWrap.classList.toggle('hidden', !(enabled && sel === 'cardinal'));
+    betaWrap.classList.toggle('hidden', !(enabled && sel === 'bundle'));
+  }
+
+  function updateParamLabels() {
+    alphaLabel.textContent = fmt2(alphaSlider.value);
+    tensionLabel.textContent = fmt2(tensionSlider.value);
+    betaLabel.textContent = fmt2(betaSlider.value);
+  }
+
+  function getSelectedCurve() {
+    const sel = curveSelect.value;
+    switch (sel) {
+      case 'catmullRom': return d3.curveCatmullRom.alpha(parseFloat(alphaSlider.value) || 0.5);
+      case 'cardinal':  return d3.curveCardinal.tension(parseFloat(tensionSlider.value) || 0);
+      case 'bundle':    return d3.curveBundle.beta(parseFloat(betaSlider.value) || 0.85);
+      case 'monotoneX': return d3.curveMonotoneX;
+      case 'natural':   return d3.curveNatural;
+      case 'basis':     return d3.curveBasis;
+      case 'bumpX':     return d3.curveBumpX;
+      case 'step':      return d3.curveStep;
+      case 'stepBefore':return d3.curveStepBefore;
+      case 'stepAfter': return d3.curveStepAfter;
+      case 'linear':
+      default:          return d3.curveLinear;
+    }
+  }
+
+  function applyCurve() {
+    if (useInterp.checked) {
+      lineGen.curve(getSelectedCurve());
+    } else {
+      lineGen.curve(d3.curveLinear);
+    }
+  }
+
+  // первичная инициализация UI
+  updateParamLabels();
+  updateInterpControlsState();
+  applyCurve();
+
+  useInterp.addEventListener('change', () => { updateInterpControlsState(); applyCurve(); scheduleRender(); });
+  curveSelect.addEventListener('change', () => { updateInterpControlsState(); applyCurve(); scheduleRender(); });
+  alphaSlider.addEventListener('input', () => { updateParamLabels(); applyCurve(); scheduleRender(); });
+  tensionSlider.addEventListener('input', () => { updateParamLabels(); applyCurve(); scheduleRender(); });
+  betaSlider.addEventListener('input', () => { updateParamLabels(); applyCurve(); scheduleRender(); });
 
   // ==== Рендер ====
   function render() {
@@ -285,7 +358,7 @@
     if (autoY.checked) {
       y.domain(computeVisibleYDomain(points)).nice();
     } else {
-      y.domain(y0.domain()); // фиксированный Y при отключенном авто-рескейле
+      y.domain(y0.domain());
     }
 
     drawAxes();
@@ -304,7 +377,6 @@
       scheduleRender();
     });
 
-  // Прямоугольник-оверлей под зум
   const overlay = svg.append("rect")
     .attr("x", MARGIN.left)
     .attr("y", MARGIN.top)
@@ -315,16 +387,10 @@
     .call(zoom);
 
   // ==== Инициализация ====
-  // стартуем с значения из поля ввода
   setData(nInput.value);
-
-  // обработчики генерации
   regenBtn.addEventListener("click", () => setData(nInput.value));
-  nInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") setData(nInput.value);
-  });
+  nInput.addEventListener("keydown", (e) => { if (e.key === "Enter") setData(nInput.value); });
 
-  // Первичный рендер (на случай, если setData уже вызвал scheduleRender до осей)
   drawAxes();
   render();
 </script>
