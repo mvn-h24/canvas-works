@@ -55,10 +55,10 @@
   // ==== Конфиг ====
   const SIZE = { width: 960, height: 420 };
   const MARGIN = { top: 16, right: 20, bottom: 28, left: 48 };
-  const AUTO_RESCALE_Y = true;           // по умолчанию включено
-  const DEFAULT_USE_DS = true;           // даунсемплинг включен
-  const DEFAULT_USE_INTERP = false;      // интерполяция выключена
-  const DEFAULT_CURVE = 'catmullRom';    // дефолт (когда включишь интерполяцию)
+  const AUTO_RESCALE_Y = true;
+  const DEFAULT_USE_DS = true;
+  const DEFAULT_USE_INTERP = false;
+  const DEFAULT_CURVE = 'catmullRom';
   const LINE_WIDTH = 1;
   const LINE_COLOR = "#2474ff";
   const BG_COLOR = getComputedStyle(document.body).backgroundColor || "#fff";
@@ -80,10 +80,9 @@
     .style("height", `${height}px`)
     .node();
 
-  const ctx = canvas.getContext("2d", { desynchronized: true });
+  const ctx = canvas.getContext("2d", { desynchronized: true }) || canvas.getContext("2d");
   ctx.scale(dpi, dpi);
 
-  // SVG поверх — только для осей и захвата событий зума
   const svg = chart.append("svg")
     .attr("width", width)
     .attr("height", height)
@@ -106,18 +105,34 @@
     gy.call(d3.axisLeft(y).ticks(Math.floor(height / 50)));
   }
 
-  // ==== Демо-данные ====
-  function generateData(n) {
-    const out = new Array(n);
+  // ==== Демо-данные (TypedArray для Y; X = индекс) ====
+  function generateY(n) {
+    const Y = new Float32Array(n);
     let yv = 0;
     for (let i = 0; i < n; i++) {
       yv += Math.sin(i * 0.015) * 0.3 + (Math.random() - 0.5) * 0.2;
-      out[i] = { x: i, y: yv };
+      Y[i] = yv;
     }
-    return out;
+    return Y;
   }
 
-  let data = [];
+  function extentFloat32(arr) {
+    let mn = +Infinity, mx = -Infinity;
+    for (let i = 0; i < arr.length; i++) {
+      const v = arr[i];
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    if (mn === mx) {
+      const eps = Math.abs(mn || 1) * 1e-6;
+      mn -= eps; mx += eps;
+    }
+    return [mn, mx];
+  }
+
+  let Y = new Float32Array(0);
+  let N = 0;
+
   const nInput = document.getElementById("nInput");
   const regenBtn = document.getElementById("regen");
   const countEl = d3.select("#count");
@@ -126,21 +141,18 @@
   function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
 
   function setData(n) {
-    const N = clamp(parseInt(n, 10) || 0, +nInput.min, MAX_POINTS);
+    N = clamp(parseInt(n, 10) || 0, +nInput.min, MAX_POINTS);
     nInput.value = String(N);
 
-    data = generateData(N);
+    Y = generateY(N);
     countEl.text(N.toLocaleString("en-US"));
 
-    x.domain(d3.extent(data, d => d.x));
+    // X = [0, N-1]
+    x.domain([0, Math.max(1, N - 1)]);
     x0.domain(x.domain());
 
-    const yDom = d3.extent(data, d => d.y);
-    if (yDom[0] === yDom[1]) {
-      const eps = Math.abs(yDom[0] || 1) * 1e-6;
-      yDom[0] -= eps; yDom[1] += eps;
-    }
-    y.domain(yDom).nice();
+    // Y — из массива
+    y.domain(extentFloat32(Y)).nice();
     y0.domain(y.domain());
 
     overlay.call(zoom.transform, d3.zoomIdentity);
@@ -149,61 +161,84 @@
     scheduleRender();
   }
 
-  // ==== Децимация: min/max на колонку пикселя ====
-  function decimateMinMaxPerPixel(src, xScale, binPx = 1, accessorX = d => d.x, accessorY = d => d.y) {
+  // ==== Вычисление видимого диапазона индексов ====
+  function visibleIndexRange() {
+    if (N === 0) return [0, -1];
+    const [xStart, xEnd] = x.domain();  // могут быть дробными
+    const i0 = clamp(Math.floor(xStart), 0, N - 1);
+    const i1 = clamp(Math.ceil(xEnd), 0, N - 1);
+    if (i1 < i0) return [i0, i0];
+    return [i0, i1];
+  }
+
+  // ==== Децимация: min/max на колонку пикселя (TypedArray) ====
+  function decimateMinMaxPerPixelY(Y, xScale, binPx = 1, i0 = 0, i1 = Y.length - 1) {
     const leftPx = MARGIN.left;
     const rightPx = width - MARGIN.right;
     const innerWidth = rightPx - leftPx;
-    if (innerWidth <= 0) return src;
+    if (innerWidth <= 0) return [];
 
     const [xStart, xEnd] = xScale.domain();
-    const domainSpan = xEnd - xStart;
-    if (domainSpan === 0) return src;
+    const domainSpan = xEnd - xStart || 1;
 
     const binsCount = Math.max(1, Math.floor(innerWidth / Math.max(1, binPx)));
-
-    // Предварительное ограничение итерации только видимым диапазоном
-    let i0 = 0, i1 = src.length - 1;
-    if (src.length >= 2 && typeof accessorX(src[0]) === "number" && accessorX(src[src.length - 1]) - accessorX(src[0]) + 1 === src.length) {
-      const base = accessorX(src[0]);
-      i0 = Math.max(0, Math.floor(xStart - base));
-      i1 = Math.min(src.length - 1, Math.ceil(xEnd - base));
-    }
-
     const binsMin = new Array(binsCount);
     const binsMax = new Array(binsCount);
 
+    // Ограничиваемся видимым диапазоном индексов
     for (let i = i0; i <= i1; i++) {
-      const d = src[i];
-      const vx = accessorX(d);
+      const vx = i; // X == индекс
       if (vx < xStart || vx > xEnd) continue;
+
       const pos = (vx - xStart) / domainSpan * (innerWidth - 1);
       const b = Math.min(binsCount - 1, Math.max(0, Math.floor(pos / Math.max(1, binPx))));
-      const vy = accessorY(d);
+      const vy = Y[i];
 
       const bmin = binsMin[b];
-      if (!bmin || vy < bmin.vy) binsMin[b] = { d, vy };
+      if (!bmin || vy < bmin.vy) binsMin[b] = { i, vy };
 
       const bmax = binsMax[b];
-      if (!bmax || vy > bmax.vy) binsMax[b] = { d, vy };
+      if (!bmax || vy > bmax.vy) binsMax[b] = { i, vy };
     }
 
-    const result = [];
+    // Сбор индексов в порядке возрастания i (важно!)
+    const idx = [];
     for (let b = 0; b < binsCount; b++) {
       const mn = binsMin[b];
       const mx = binsMax[b];
       if (!mn && !mx) continue;
-      if (!mn || !mx || mn.d === mx.d) {
-        result.push((mn || mx).d);
+      if (!mn || !mx || mn.i === mx.i) {
+        const ii = (mn || mx).i;
+        if (idx.length === 0 || idx[idx.length - 1] !== ii) idx.push(ii);
       } else {
-        result.push(mn.d, mx.d);
+        if (mn.i < mx.i) {
+          if (idx.length === 0 || idx[idx.length - 1] !== mn.i) idx.push(mn.i);
+          if (idx[idx.length - 1] !== mx.i) idx.push(mx.i);
+        } else {
+          if (idx.length === 0 || idx[idx.length - 1] !== mx.i) idx.push(mx.i);
+          if (idx[idx.length - 1] !== mn.i) idx.push(mn.i);
+        }
       }
     }
-    return result.length ? result : src;
+
+    // Пришиваем крайние индексы окна
+    if (i0 <= i1) {
+      if (idx.length === 0 || idx[0] !== i0) idx.unshift(i0);
+      if (idx[idx.length - 1] !== i1) idx.push(i1);
+    }
+
+    // Формируем точки для d3.line
+    const points = new Array(idx.length);
+    for (let k = 0; k < idx.length; k++) {
+      const ii = idx[k];
+      points[k] = { x: ii, y: Y[ii] };
+    }
+    return points;
   }
 
   // ==== Линия через d3-shape с Canvas контекстом ====
   const lineGen = d3.line()
+    .defined(d => Number.isFinite(d.y))
     .x(d => x(d.x))
     .y(d => y(d.y))
     .context(ctx);
@@ -221,14 +256,21 @@
 
   function drawLine(points) {
     if (!points.length) return;
+    ctx.save();
+    // Клип по области графика
+    ctx.beginPath();
+    ctx.rect(MARGIN.left, MARGIN.top, width - MARGIN.left - MARGIN.right, height - MARGIN.top - MARGIN.bottom);
+    ctx.clip();
+
     ctx.beginPath();
     lineGen(points);
     ctx.lineWidth = LINE_WIDTH;
     ctx.strokeStyle = LINE_COLOR;
     ctx.stroke();
+    ctx.restore();
   }
 
-  function computeVisibleYDomain(points) {
+  function computeVisibleYDomainFromPoints(points) {
     if (!points.length) return y.domain();
     let ymin = +Infinity, ymax = -Infinity;
     for (let i = 0; i < points.length; i++) {
@@ -263,7 +305,10 @@
   function updateRateLabel() { dsRateLabel.textContent = `${dsRate.value}px/бин`; }
   updateRateLabel();
 
-  useDS.addEventListener("change", () => { dsRate.disabled = !useDS.checked; scheduleRender(); });
+  useDS.addEventListener("change", () => {
+    dsRate.disabled = !useDS.checked;
+    scheduleRender();
+  });
   dsRate.addEventListener("input", () => { updateRateLabel(); scheduleRender(); });
   dsRate.disabled = !useDS.checked;
 
@@ -289,7 +334,6 @@
   function updateInterpControlsState() {
     const enabled = useInterp.checked;
     curveSelect.disabled = !enabled;
-    // показываем/скрываем слайдеры по выбранной кривой
     const sel = curveSelect.value;
     alphaWrap.classList.toggle('hidden', !(enabled && sel === 'catmullRom'));
     tensionWrap.classList.toggle('hidden', !(enabled && sel === 'cardinal'));
@@ -328,7 +372,6 @@
     }
   }
 
-  // первичная инициализация UI
   updateParamLabels();
   updateInterpControlsState();
   applyCurve();
@@ -343,20 +386,29 @@
   function render() {
     clearCanvas();
 
-    let points;
+    let points = [];
+    const [i0, i1] = visibleIndexRange();
+
     if (useDS.checked) {
-      points = decimateMinMaxPerPixel(
-        data,
+      points = decimateMinMaxPerPixelY(
+        Y,
         x,
-        Math.max(1, parseInt(dsRate.value, 10) || 1)
+        Math.max(1, parseInt(dsRate.value, 10) || 1),
+        i0,
+        i1
       );
     } else {
-      const [xStart, xEnd] = x.domain();
-      points = data.filter(d => d.x >= xStart && d.x <= xEnd);
+      // Оптимизированный проход по диапазону индексов (без filter)
+      const len = Math.max(0, i1 - i0 + 1);
+      points = new Array(len);
+      for (let i = 0; i < len; i++) {
+        const ii = i0 + i;
+        points[i] = { x: ii, y: Y[ii] };
+      }
     }
 
     if (autoY.checked) {
-      y.domain(computeVisibleYDomain(points)).nice();
+      y.domain(computeVisibleYDomainFromPoints(points)).nice();
     } else {
       y.domain(y0.domain());
     }
