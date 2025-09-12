@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8" />
-<title>D3 + Canvas: High-density Line (Downsampling + Interpolation Selector)</title>
+<title>D3 + Canvas: High-density Line (Downsampling + Interpolation + Series)</title>
 <style>
   :root { color-scheme: light dark; }
   body { margin: 0; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
@@ -13,6 +13,8 @@
   input[type="number"] { width: 10ch; }
   button { padding: 4px 10px; }
   .hidden { display: none; }
+  .params { display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .params label { gap: 6px; }
 </style>
 
 <div id="wrap">
@@ -41,6 +43,23 @@
     <label id="alphaWrap" class="hidden">α: <input id="alphaSlider" type="range" min="0" max="1" step="0.05" value="0.5" /> <b id="alphaLabel">0.50</b></label>
     <label id="tensionWrap" class="hidden">τ: <input id="tensionSlider" type="range" min="0" max="1" step="0.05" value="0.00" /> <b id="tensionLabel">0.00</b></label>
     <label id="betaWrap" class="hidden">β: <input id="betaSlider" type="range" min="0" max="1" step="0.05" value="0.85" /> <b id="betaLabel">0.85</b></label>
+
+    <!-- НОВОЕ: выбор серии и её параметры -->
+    <label>серия:
+      <select id="seriesSelect">
+        <option value="sine">sin</option>
+        <option value="cosine">cos</option>
+        <option value="chirp">chirp (sweep)</option>
+        <option value="seasonTrend">тренд+сезонность</option>
+        <option value="gaussianNoise">нормальный шум</option>
+        <option value="randomWalk">random walk</option>
+        <option value="ar1">AR(1)</option>
+        <option value="spikes">редкие спайки</option>
+        <option value="stepJumps">ступенчатые скачки</option>
+        <option value="gaussianBell">гауссов колокол</option>
+      </select>
+    </label>
+    <span id="seriesParams" class="params"></span>
 
     <label>точек: <input id="nInput" type="number" min="1000" max="5000000" step="10000" value="500000" /></label>
     <button id="regen">Перегенерировать</button>
@@ -92,79 +111,251 @@
   // ==== Шкалы ====
   const x = d3.scaleLinear().range([MARGIN.left, width - MARGIN.right]);
   const y = d3.scaleLinear().range([height - MARGIN.bottom, MARGIN.top]);
-
   const x0 = x.copy();
   const y0 = y.copy();
 
   // ==== Оси ====
   const gx = svg.append("g").attr("class", "axis x").attr("transform", `translate(0,${height - MARGIN.bottom})`);
   const gy = svg.append("g").attr("class", "axis y").attr("transform", `translate(${MARGIN.left},0)`);
-
   function drawAxes() {
     gx.call(d3.axisBottom(x).ticks(Math.floor(width / 80)));
     gy.call(d3.axisLeft(y).ticks(Math.floor(height / 50)));
   }
 
-  // ==== Демо-данные (TypedArray для Y; X = индекс) ====
-  function generateY(n) {
-    const Y = new Float32Array(n);
-    let yv = 0;
-    for (let i = 0; i < n; i++) {
-      yv += Math.sin(i * 0.015) * 0.3 + (Math.random() - 0.5) * 0.2;
-      Y[i] = yv;
-    }
-    return Y;
-  }
-
+  // ==== Хелперы ====
   function extentFloat32(arr) {
     let mn = +Infinity, mx = -Infinity;
-    for (let i = 0; i < arr.length; i++) {
-      const v = arr[i];
-      if (v < mn) mn = v;
-      if (v > mx) mx = v;
-    }
-    if (mn === mx) {
-      const eps = Math.abs(mn || 1) * 1e-6;
-      mn -= eps; mx += eps;
-    }
+    for (let i = 0; i < arr.length; i++) { const v = arr[i]; if (v < mn) mn = v; if (v > mx) mx = v; }
+    if (mn === mx) { const eps = Math.abs(mn || 1) * 1e-6; mn -= eps; mx += eps; }
     return [mn, mx];
   }
+  function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
 
+  // Быстрая гауссовская выборка (Box–Muller с кешем)
+  let _bmHas = false, _bmSpare = 0;
+  function randn() {
+    if (_bmHas) { _bmHas = false; return _bmSpare; }
+    let u=0, v=0; while (u===0) u=Math.random(); while (v===0) v=Math.random();
+    const r = Math.sqrt(-2.0 * Math.log(u)); const theta = 2.0 * Math.PI * v;
+    _bmSpare = r * Math.sin(theta); _bmHas = true;
+    return r * Math.cos(theta);
+  }
+
+  // ==== Серии данных ====
+  // Каждый генератор: (n, p) => Float32Array
+  const DATASETS = {
+    sine: {
+      label: "sin",
+      params: [
+        { key: "amp", label: "A", type: "range", min: 0, max: 5, step: 0.1, value: 1 },
+        { key: "freq", label: "freq(циклов)", type: "range", min: 0.1, max: 200, step: 0.1, value: 10 },
+        { key: "phase", label: "φ(rad)", type: "range", min: 0, max: 6.283, step: 0.01, value: 0 },
+        { key: "noise", label: "σ шум", type: "range", min: 0, max: 1, step: 0.01, value: 0.05 },
+      ],
+      gen(n, p) {
+        const Y = new Float32Array(n);
+        const w = 2 * Math.PI * p.freq / n;
+        for (let i=0;i<n;i++) Y[i] = p.amp * Math.sin(w*i + p.phase) + p.noise * randn();
+        return Y;
+      }
+    },
+    cosine: {
+      label: "cos",
+      params: [
+        { key: "amp", label: "A", type: "range", min: 0, max: 5, step: 0.1, value: 1 },
+        { key: "freq", label: "freq", type: "range", min: 0.1, max: 200, step: 0.1, value: 10 },
+        { key: "phase", label: "φ(rad)", type: "range", min: 0, max: 6.283, step: 0.01, value: 0 },
+        { key: "noise", label: "σ шум", type: "range", min: 0, max: 1, step: 0.01, value: 0.05 },
+      ],
+      gen(n, p) {
+        const Y = new Float32Array(n);
+        const w = 2 * Math.PI * p.freq / n;
+        for (let i=0;i<n;i++) Y[i] = p.amp * Math.cos(w*i + p.phase) + p.noise * randn();
+        return Y;
+      }
+    },
+    chirp: {
+      label: "chirp",
+      params: [
+        { key: "amp", label: "A", type: "range", min: 0, max: 5, step: 0.1, value: 1 },
+        { key: "f0", label: "f0", type: "range", min: 0.01, max: 50, step: 0.01, value: 1 },
+        { key: "f1", label: "f1", type: "range", min: 0.01, max: 200, step: 0.01, value: 40 },
+        { key: "noise", label: "σ шум", type: "range", min: 0, max: 1, step: 0.01, value: 0.03 },
+      ],
+      gen(n, p) {
+        const Y = new Float32Array(n);
+        let theta = 0;
+        for (let i=0;i<n;i++) {
+          const t = n <= 1 ? 0 : i/(n-1);
+          const f = p.f0 + (p.f1 - p.f0) * t;       // циклов на весь ряд
+          theta += 2*Math.PI * f / n;               // дискретная интеграция частоты
+          Y[i] = p.amp * Math.sin(theta) + p.noise * randn();
+        }
+        return Y;
+      }
+    },
+    seasonTrend: {
+      label: "тренд+сезонность",
+      params: [
+        { key: "slope", label: "slope", type: "range", min: -2, max: 2, step: 0.01, value: 0.3 },
+        { key: "amp", label: "A", type: "range", min: 0, max: 5, step: 0.1, value: 1.2 },
+        { key: "freq", label: "freq", type: "range", min: 0.5, max: 50, step: 0.5, value: 8 },
+        { key: "noise", label: "σ шум", type: "range", min: 0, max: 1, step: 0.01, value: 0.05 },
+      ],
+      gen(n, p) {
+        const Y = new Float32Array(n);
+        const w = 2 * Math.PI * p.freq / n;
+        for (let i=0;i<n;i++) {
+          const t = i / n;
+          Y[i] = p.slope * t + p.amp * Math.sin(w*i) + p.noise * randn();
+        }
+        return Y;
+      }
+    },
+    gaussianNoise: {
+      label: "нормальный шум",
+      params: [
+        { key: "mu", label: "μ", type: "range", min: -2, max: 2, step: 0.01, value: 0 },
+        { key: "sigma", label: "σ", type: "range", min: 0.001, max: 1.5, step: 0.001, value: 0.1 },
+      ],
+      gen(n, p) {
+        const Y = new Float32Array(n);
+        for (let i=0;i<n;i++) Y[i] = p.mu + p.sigma * randn();
+        return Y;
+      }
+    },
+    randomWalk: {
+      label: "random walk",
+      params: [
+        { key: "drift", label: "дрейф", type: "range", min: -0.2, max: 0.2, step: 0.001, value: 0.0 },
+        { key: "sigma", label: "σ шага", type: "range", min: 0.001, max: 1, step: 0.001, value: 0.05 },
+      ],
+      gen(n, p) {
+        const Y = new Float32Array(n);
+        let yv = 0;
+        for (let i=0;i<n;i++) { yv += p.drift + p.sigma * randn(); Y[i] = yv; }
+        return Y;
+      }
+    },
+    ar1: {
+      label: "AR(1)",
+      params: [
+        { key: "phi", label: "φ", type: "range", min: -0.99, max: 0.99, step: 0.01, value: 0.9 },
+        { key: "sigma", label: "σ шум", type: "range", min: 0.001, max: 1, step: 0.001, value: 0.05 },
+        { key: "drift", label: "дрейф", type: "range", min: -0.2, max: 0.2, step: 0.001, value: 0.0 },
+      ],
+      gen(n, p) {
+        const Y = new Float32Array(n);
+        let yv = 0;
+        for (let i=0;i<n;i++) { yv = p.drift + p.phi * yv + p.sigma * randn(); Y[i] = yv; }
+        return Y;
+      }
+    },
+    spikes: {
+      label: "спайки",
+      params: [
+        { key: "rate", label: "p(спайк)", type: "range", min: 0, max: 0.1, step: 0.001, value: 0.01 },
+        { key: "amp", label: "A спайка", type: "range", min: 0, max: 10, step: 0.1, value: 3 },
+        { key: "baseNoise", label: "σ шум", type: "range", min: 0, max: 1, step: 0.01, value: 0.05 },
+      ],
+      gen(n, p) {
+        const Y = new Float32Array(n);
+        for (let i=0;i<n;i++) {
+          let v = p.baseNoise * randn();
+          if (Math.random() < p.rate) v += p.amp * (Math.random()<0.5 ? -1 : 1);
+          Y[i] = v;
+        }
+        return Y;
+      }
+    },
+    stepJumps: {
+      label: "ступеньки",
+      params: [
+        { key: "avgPeriod", label: "период", type: "range", min: 10, max: 50000, step: 10, value: 2000 },
+        { key: "jump", label: "Δ шаг", type: "range", min: 0, max: 5, step: 0.05, value: 1 },
+        { key: "baseNoise", label: "σ шум", type: "range", min: 0, max: 0.5, step: 0.01, value: 0.03 },
+      ],
+      gen(n, p) {
+        const Y = new Float32Array(n);
+        let level = 0, toNext = Math.max(1, Math.round(p.avgPeriod * (0.5 + Math.random())));
+        for (let i=0;i<n;i++) {
+          if (--toNext <= 0) {
+            level += p.jump * (Math.random() < 0.5 ? -1 : 1);
+            toNext = Math.max(1, Math.round(p.avgPeriod * (0.5 + Math.random())));
+          }
+          Y[i] = level + p.baseNoise * randn();
+        }
+        return Y;
+      }
+    },
+    gaussianBell: {
+      label: "гауссов колокол",
+      params: [
+        { key: "amp", label: "A", type: "range", min: 0, max: 5, step: 0.05, value: 1.5 },
+        { key: "center", label: "центр(0..1)", type: "range", min: 0, max: 1, step: 0.001, value: 0.5 },
+        { key: "width", label: "ширина(σ/N)", type: "range", min: 0.001, max: 0.5, step: 0.001, value: 0.08 },
+        { key: "noise", label: "σ шум", type: "range", min: 0, max: 0.5, step: 0.005, value: 0.01 },
+      ],
+      gen(n, p) {
+        const Y = new Float32Array(n);
+        const mu = p.center * (n-1);
+        const sigma = Math.max(1e-9, p.width * n);
+        for (let i=0;i<n;i++) {
+          const z = (i - mu) / sigma;
+          Y[i] = p.amp * Math.exp(-0.5 * z*z) + p.noise * randn();
+        }
+        return Y;
+      }
+    },
+  };
+
+  // ==== Демо-данные ====
   let Y = new Float32Array(0);
   let N = 0;
 
+  // ==== UI ссылки ====
   const nInput = document.getElementById("nInput");
   const regenBtn = document.getElementById("regen");
   const countEl = d3.select("#count");
   const visibleEl = d3.select("#visible");
 
-  function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
+  const seriesSelect = document.getElementById("seriesSelect");
+  const seriesParamsEl = document.getElementById("seriesParams");
 
-  function setData(n) {
-    N = clamp(parseInt(n, 10) || 0, +nInput.min, MAX_POINTS);
-    nInput.value = String(N);
-
-    Y = generateY(N);
-    countEl.text(N.toLocaleString("en-US"));
-
-    // X = [0, N-1]
-    x.domain([0, Math.max(1, N - 1)]);
-    x0.domain(x.domain());
-
-    // Y — из массива
-    y.domain(extentFloat32(Y)).nice();
-    y0.domain(y.domain());
-
-    overlay.call(zoom.transform, d3.zoomIdentity);
-
-    drawAxes();
-    scheduleRender();
+  // Построение UI параметров для выбранной серии
+  function buildParamsUI() {
+    const def = DATASETS[seriesSelect.value];
+    seriesParamsEl.innerHTML = "";
+    def.params.forEach(p => {
+      const id = `p_${p.key}`;
+      const wrap = document.createElement("label");
+      wrap.htmlFor = id;
+      const input = document.createElement("input");
+      input.id = id;
+      input.type = p.type || "range";
+      input.min = String(p.min); input.max = String(p.max); input.step = String(p.step); input.value = String(p.value);
+      const b = document.createElement("b");
+      b.textContent = String(p.value);
+      input.addEventListener("input", () => { b.textContent = input.value; });
+      input.addEventListener("change", () => setData(nInput.value)); // не душим CPU на input
+      wrap.append(p.label + ": ", input, " ", b);
+      seriesParamsEl.appendChild(wrap);
+    });
+  }
+  function readParams() {
+    const def = DATASETS[seriesSelect.value];
+    const params = {};
+    def.params.forEach(p => {
+      const el = document.getElementById(`p_${p.key}`);
+      params[p.key] = parseFloat(el.value);
+    });
+    return params;
   }
 
   // ==== Вычисление видимого диапазона индексов ====
   function visibleIndexRange() {
     if (N === 0) return [0, -1];
-    const [xStart, xEnd] = x.domain();  // могут быть дробными
+    const [xStart, xEnd] = x.domain();
     const i0 = clamp(Math.floor(xStart), 0, N - 1);
     const i1 = clamp(Math.ceil(xEnd), 0, N - 1);
     if (i1 < i0) return [i0, i0];
@@ -173,66 +364,37 @@
 
   // ==== Децимация: min/max на колонку пикселя (TypedArray) ====
   function decimateMinMaxPerPixelY(Y, xScale, binPx = 1, i0 = 0, i1 = Y.length - 1) {
-    const leftPx = MARGIN.left;
-    const rightPx = width - MARGIN.right;
-    const innerWidth = rightPx - leftPx;
-    if (innerWidth <= 0) return [];
-
-    const [xStart, xEnd] = xScale.domain();
-    const domainSpan = xEnd - xStart || 1;
-
+    const leftPx = MARGIN.left, rightPx = width - MARGIN.right;
+    const innerWidth = rightPx - leftPx; if (innerWidth <= 0) return [];
+    const [xStart, xEnd] = xScale.domain(); const domainSpan = xEnd - xStart || 1;
     const binsCount = Math.max(1, Math.floor(innerWidth / Math.max(1, binPx)));
-    const binsMin = new Array(binsCount);
-    const binsMax = new Array(binsCount);
+    const binsMin = new Array(binsCount), binsMax = new Array(binsCount);
 
-    // Ограничиваемся видимым диапазоном индексов
     for (let i = i0; i <= i1; i++) {
-      const vx = i; // X == индекс
+      const vx = i;
       if (vx < xStart || vx > xEnd) continue;
-
       const pos = (vx - xStart) / domainSpan * (innerWidth - 1);
       const b = Math.min(binsCount - 1, Math.max(0, Math.floor(pos / Math.max(1, binPx))));
       const vy = Y[i];
-
-      const bmin = binsMin[b];
-      if (!bmin || vy < bmin.vy) binsMin[b] = { i, vy };
-
-      const bmax = binsMax[b];
-      if (!bmax || vy > bmax.vy) binsMax[b] = { i, vy };
+      const bmin = binsMin[b]; if (!bmin || vy < bmin.vy) binsMin[b] = { i, vy };
+      const bmax = binsMax[b]; if (!bmax || vy > bmax.vy) binsMax[b] = { i, vy };
     }
 
-    // Сбор индексов в порядке возрастания i (важно!)
     const idx = [];
     for (let b = 0; b < binsCount; b++) {
-      const mn = binsMin[b];
-      const mx = binsMax[b];
+      const mn = binsMin[b], mx = binsMax[b];
       if (!mn && !mx) continue;
       if (!mn || !mx || mn.i === mx.i) {
-        const ii = (mn || mx).i;
-        if (idx.length === 0 || idx[idx.length - 1] !== ii) idx.push(ii);
+        const ii = (mn || mx).i; if (idx.length === 0 || idx[idx.length - 1] !== ii) idx.push(ii);
       } else {
-        if (mn.i < mx.i) {
-          if (idx.length === 0 || idx[idx.length - 1] !== mn.i) idx.push(mn.i);
-          if (idx[idx.length - 1] !== mx.i) idx.push(mx.i);
-        } else {
-          if (idx.length === 0 || idx[idx.length - 1] !== mx.i) idx.push(mx.i);
-          if (idx[idx.length - 1] !== mn.i) idx.push(mn.i);
-        }
+        if (mn.i < mx.i) { if (idx.length === 0 || idx[idx.length - 1] !== mn.i) idx.push(mn.i); if (idx[idx.length - 1] !== mx.i) idx.push(mx.i); }
+        else { if (idx.length === 0 || idx[idx.length - 1] !== mx.i) idx.push(mx.i); if (idx[idx.length - 1] !== mn.i) idx.push(mn.i); }
       }
     }
+    if (i0 <= i1) { if (idx.length === 0 || idx[0] !== i0) idx.unshift(i0); if (idx[idx.length - 1] !== i1) idx.push(i1); }
 
-    // Пришиваем крайние индексы окна
-    if (i0 <= i1) {
-      if (idx.length === 0 || idx[0] !== i0) idx.unshift(i0);
-      if (idx[idx.length - 1] !== i1) idx.push(i1);
-    }
-
-    // Формируем точки для d3.line
     const points = new Array(idx.length);
-    for (let k = 0; k < idx.length; k++) {
-      const ii = idx[k];
-      points[k] = { x: ii, y: Y[ii] };
-    }
+    for (let k = 0; k < idx.length; k++) { const ii = idx[k]; points[k] = { x: ii, y: Y[ii] }; }
     return points;
   }
 
@@ -244,93 +406,51 @@
     .context(ctx);
 
   function clearCanvas() {
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (BG_COLOR) {
-      ctx.fillStyle = BG_COLOR;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (BG_COLOR) { ctx.fillStyle = BG_COLOR; ctx.fillRect(0, 0, canvas.width, canvas.height); }
     ctx.restore();
   }
-
   function drawLine(points) {
     if (!points.length) return;
     ctx.save();
-    // Клип по области графика
-    ctx.beginPath();
-    ctx.rect(MARGIN.left, MARGIN.top, width - MARGIN.left - MARGIN.right, height - MARGIN.top - MARGIN.bottom);
-    ctx.clip();
-
-    ctx.beginPath();
-    lineGen(points);
-    ctx.lineWidth = LINE_WIDTH;
-    ctx.strokeStyle = LINE_COLOR;
-    ctx.stroke();
+    ctx.beginPath(); ctx.rect(MARGIN.left, MARGIN.top, width - MARGIN.left - MARGIN.right, height - MARGIN.top - MARGIN.bottom); ctx.clip();
+    ctx.beginPath(); lineGen(points); ctx.lineWidth = LINE_WIDTH; ctx.strokeStyle = LINE_COLOR; ctx.stroke();
     ctx.restore();
   }
-
   function computeVisibleYDomainFromPoints(points) {
     if (!points.length) return y.domain();
     let ymin = +Infinity, ymax = -Infinity;
-    for (let i = 0; i < points.length; i++) {
-      const v = points[i].y;
-      if (v < ymin) ymin = v;
-      if (v > ymax) ymax = v;
-    }
-    if (ymin === ymax) {
-      const eps = Math.abs(ymin || 1) * 1e-6;
-      ymin -= eps; ymax += eps;
-    }
+    for (let i = 0; i < points.length; i++) { const v = points[i].y; if (v < ymin) ymin = v; if (v > ymax) ymax = v; }
+    if (ymin === ymax) { const eps = Math.abs(ymin || 1) * 1e-6; ymin -= eps; ymax += eps; }
     return [ymin, ymax];
   }
 
   // RAF-батчинг
   let raf = 0;
-  function scheduleRender() {
-    cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(render);
-  }
+  function scheduleRender() { cancelAnimationFrame(raf); raf = requestAnimationFrame(render); }
 
-  // ==== UI элементы ====
-  const autoY = document.getElementById("autoY");
-  autoY.checked = AUTO_RESCALE_Y;
-  autoY.addEventListener("change", scheduleRender);
-
-  const useDS = document.getElementById("useDS");
-  useDS.checked = DEFAULT_USE_DS;
-
-  const dsRate = document.getElementById("dsRate");
-  const dsRateLabel = document.getElementById("dsRateLabel");
-  function updateRateLabel() { dsRateLabel.textContent = `${dsRate.value}px/бин`; }
-  updateRateLabel();
-
-  useDS.addEventListener("change", () => {
-    dsRate.disabled = !useDS.checked;
-    scheduleRender();
-  });
+  // ==== UI: интерполяция ====
+  const autoY = document.getElementById("autoY"); autoY.checked = AUTO_RESCALE_Y; autoY.addEventListener("change", scheduleRender);
+  const useDS = document.getElementById("useDS"); useDS.checked = DEFAULT_USE_DS;
+  const dsRate = document.getElementById("dsRate"); const dsRateLabel = document.getElementById("dsRateLabel");
+  function updateRateLabel() { dsRateLabel.textContent = `${dsRate.value}px/бин`; } updateRateLabel();
+  useDS.addEventListener("change", () => { dsRate.disabled = !useDS.checked; scheduleRender(); });
   dsRate.addEventListener("input", () => { updateRateLabel(); scheduleRender(); });
   dsRate.disabled = !useDS.checked;
 
-  const useInterp = document.getElementById("useInterp");
-  useInterp.checked = DEFAULT_USE_INTERP;
-
-  const curveSelect = document.getElementById("curveSelect");
-  curveSelect.value = DEFAULT_CURVE;
+  const useInterp = document.getElementById("useInterp"); useInterp.checked = DEFAULT_USE_INTERP;
+  const curveSelect = document.getElementById("curveSelect"); curveSelect.value = DEFAULT_CURVE;
 
   const alphaWrap = document.getElementById("alphaWrap");
   const tensionWrap = document.getElementById("tensionWrap");
   const betaWrap = document.getElementById("betaWrap");
-
   const alphaSlider = document.getElementById("alphaSlider");
   const alphaLabel = document.getElementById("alphaLabel");
   const tensionSlider = document.getElementById("tensionSlider");
   const tensionLabel = document.getElementById("tensionLabel");
   const betaSlider = document.getElementById("betaSlider");
   const betaLabel = document.getElementById("betaLabel");
-
   function fmt2(v) { return (+v).toFixed(2); }
-
   function updateInterpControlsState() {
     const enabled = useInterp.checked;
     curveSelect.disabled = !enabled;
@@ -339,13 +459,7 @@
     tensionWrap.classList.toggle('hidden', !(enabled && sel === 'cardinal'));
     betaWrap.classList.toggle('hidden', !(enabled && sel === 'bundle'));
   }
-
-  function updateParamLabels() {
-    alphaLabel.textContent = fmt2(alphaSlider.value);
-    tensionLabel.textContent = fmt2(tensionSlider.value);
-    betaLabel.textContent = fmt2(betaSlider.value);
-  }
-
+  function updateParamLabels() { alphaLabel.textContent = fmt2(alphaSlider.value); tensionLabel.textContent = fmt2(tensionSlider.value); betaLabel.textContent = fmt2(betaSlider.value); }
   function getSelectedCurve() {
     const sel = curveSelect.value;
     switch (sel) {
@@ -363,19 +477,8 @@
       default:          return d3.curveLinear;
     }
   }
-
-  function applyCurve() {
-    if (useInterp.checked) {
-      lineGen.curve(getSelectedCurve());
-    } else {
-      lineGen.curve(d3.curveLinear);
-    }
-  }
-
-  updateParamLabels();
-  updateInterpControlsState();
-  applyCurve();
-
+  function applyCurve() { lineGen.curve(useInterp.checked ? getSelectedCurve() : d3.curveLinear); }
+  updateParamLabels(); updateInterpControlsState(); applyCurve();
   useInterp.addEventListener('change', () => { updateInterpControlsState(); applyCurve(); scheduleRender(); });
   curveSelect.addEventListener('change', () => { updateInterpControlsState(); applyCurve(); scheduleRender(); });
   alphaSlider.addEventListener('input', () => { updateParamLabels(); applyCurve(); scheduleRender(); });
@@ -385,33 +488,19 @@
   // ==== Рендер ====
   function render() {
     clearCanvas();
-
     let points = [];
     const [i0, i1] = visibleIndexRange();
 
     if (useDS.checked) {
-      points = decimateMinMaxPerPixelY(
-        Y,
-        x,
-        Math.max(1, parseInt(dsRate.value, 10) || 1),
-        i0,
-        i1
-      );
+      points = decimateMinMaxPerPixelY(Y, x, Math.max(1, parseInt(dsRate.value, 10) || 1), i0, i1);
     } else {
-      // Оптимизированный проход по диапазону индексов (без filter)
       const len = Math.max(0, i1 - i0 + 1);
       points = new Array(len);
-      for (let i = 0; i < len; i++) {
-        const ii = i0 + i;
-        points[i] = { x: ii, y: Y[ii] };
-      }
+      for (let i = 0; i < len; i++) { const ii = i0 + i; points[i] = { x: ii, y: Y[ii] }; }
     }
 
-    if (autoY.checked) {
-      y.domain(computeVisibleYDomainFromPoints(points)).nice();
-    } else {
-      y.domain(y0.domain());
-    }
+    if (autoY.checked) y.domain(computeVisibleYDomainFromPoints(points)).nice();
+    else y.domain(y0.domain());
 
     drawAxes();
     visibleEl.text(points.length.toLocaleString("en-US"));
@@ -422,27 +511,40 @@
   const zoom = d3.zoom()
     .scaleExtent([1, 10_000])
     .translateExtent([[MARGIN.left, MARGIN.top], [width - MARGIN.right, height - MARGIN.bottom]])
-    .on("zoom", (ev) => {
-      const t = ev.transform;
-      const zx = t.rescaleX(x0);
-      x.domain(zx.domain());
-      scheduleRender();
-    });
+    .on("zoom", (ev) => { const t = ev.transform; const zx = t.rescaleX(x0); x.domain(zx.domain()); scheduleRender(); });
 
   const overlay = svg.append("rect")
-    .attr("x", MARGIN.left)
-    .attr("y", MARGIN.top)
+    .attr("x", MARGIN.left).attr("y", MARGIN.top)
     .attr("width", width - MARGIN.left - MARGIN.right)
     .attr("height", height - MARGIN.top - MARGIN.bottom)
-    .style("fill", "transparent")
-    .style("cursor", "grab")
+    .style("fill", "transparent").style("cursor", "grab")
     .call(zoom);
 
-  // ==== Инициализация ====
-  setData(nInput.value);
-  regenBtn.addEventListener("click", () => setData(nInput.value));
-  nInput.addEventListener("keydown", (e) => { if (e.key === "Enter") setData(nInput.value); });
+  // ==== Данные/инициализация ====
+  function setData(n) {
+    N = clamp(parseInt(n, 10) || 0, +nInput.min, MAX_POINTS);
+    nInput.value = String(N);
+    const def = DATASETS[seriesSelect.value];
+    const params = readParams();
+    Y = def.gen(N, params);
 
+    countEl.text(N.toLocaleString("en-US"));
+    x.domain([0, Math.max(1, N - 1)]); x0.domain(x.domain());
+    y.domain(extentFloat32(Y)).nice();  y0.domain(y.domain());
+
+    overlay.call(zoom.transform, d3.zoomIdentity);
+    drawAxes(); scheduleRender();
+  }
+
+  seriesSelect.addEventListener("change", () => { buildParamsUI(); setData(nInput.value); });
+
+  const nEl = document.getElementById("nInput");
+  regenBtn.addEventListener("click", () => setData(nEl.value));
+  nEl.addEventListener("keydown", (e) => { if (e.key === "Enter") setData(nEl.value); });
+
+  // Старт
+  buildParamsUI();
+  setData(nInput.value);
   drawAxes();
   render();
 </script>
