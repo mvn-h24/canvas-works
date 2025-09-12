@@ -1,70 +1,132 @@
 <!doctype html>
 <meta charset="utf-8" />
-<title>D3 + Canvas: High-density Line (Downsampling + Interpolation + Series)</title>
+<title>D3 + Canvas: High-density Line (Downsampling + Interpolation + Series) — UI v2</title>
 <style>
   :root { color-scheme: light dark; }
-  body { margin: 0; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-  #wrap { width: 100%; max-width: 1000px; margin: 24px auto; padding: 0 12px; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif; }
+  #wrap { width: 100%; max-width: 1100px; margin: 24px auto; padding: 0 12px; }
+
+  /* Toolbar */
+  .toolbar { position: sticky; top: 0; z-index: 5; backdrop-filter: blur(6px);
+    background: color-mix(in oklab, Canvas, transparent 10%);
+    border-bottom: 1px solid color-mix(in oklab, CanvasText, transparent 85%);
+    padding: 8px 8px 6px; border-radius: 12px; }
+  .groups { display: grid; gap: 10px; grid-template-columns: repeat(12, 1fr); align-items: start; }
+  .group { grid-column: span 12; border: 1px solid color-mix(in oklab, CanvasText, transparent 85%);
+    border-radius: 10px; padding: 2px 6px 8px; background: color-mix(in oklab, Canvas, transparent 5%); }
+  @media (min-width: 880px) {
+    .group[data-span="6"] { grid-column: span 6; }
+    .group[data-span="4"] { grid-column: span 4; }
+    .group[data-span="3"] { grid-column: span 3; }
+  }
+  .group > summary { cursor: pointer; user-select: none; font-weight: 600; padding: 6px 2px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: center; }
+  .row label { display: inline-flex; gap: 6px; align-items: center; }
+  .row .params { display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  input[type="number"] { width: 10ch; }
+  button { padding: 4px 10px; border-radius: 8px; border: 1px solid color-mix(in oklab, CanvasText, transparent 80%); cursor: pointer; }
+
   .chart { position: relative; user-select: none; }
   .axis path, .axis line { shape-rendering: crispEdges; }
-  .hud { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
-  .hud label { display: inline-flex; gap: 6px; align-items: center; }
-  .legend { opacity: .7; }
-  input[type="number"] { width: 10ch; }
-  button { padding: 4px 10px; }
-  .hidden { display: none; }
-  .params { display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .params label { gap: 6px; }
+
+  /* Legend overlay */
+  .legend-overlay { position: absolute; right: 10px; top: 10px; z-index: 3; padding: 8px 10px;
+    border-radius: 10px; font-size: 12px; line-height: 1.35;
+    background: color-mix(in oklab, Canvas, transparent 10%);
+    border: 1px solid color-mix(in oklab, CanvasText, transparent 85%);
+    max-width: 46ch; }
+  .legend-row { display: grid; grid-template-columns: auto 1fr; gap: 6px 8px; align-items: center; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; border: 1px solid color-mix(in oklab, CanvasText, transparent 70%); }
+  .muted { opacity: .75; }
+
+  /* Helpers */
+  .hidden { display: none !important; }
 </style>
 
 <div id="wrap">
-  <div class="hud">
-    <label><input id="autoY" type="checkbox" checked /> авто-масштаб Y при зуме</label>
-    <label><input id="useDS" type="checkbox" checked /> даунсемплинг</label>
-    <label class="rate">агрессивность: <input id="dsRate" type="range" min="1" max="16" step="1" value="1" /> <b id="dsRateLabel">1px/бин</b></label>
+  <!-- Toolbar grouped controls -->
+  <div class="toolbar">
+    <div class="groups">
 
-    <label><input id="useInterp" type="checkbox" /> интерполяция</label>
-    <label>тип:
-      <select id="curveSelect" disabled>
-        <option value="catmullRom">Catmull–Rom</option>
-        <option value="monotoneX">Monotone X</option>
-        <option value="natural">Natural</option>
-        <option value="basis">Basis</option>
-        <option value="cardinal">Cardinal</option>
-        <option value="bundle">Bundle</option>
-        <option value="bumpX">Bump X</option>
-        <option value="step">Step</option>
-        <option value="stepBefore">Step Before</option>
-        <option value="stepAfter">Step After</option>
-        <option value="linear">Linear</option>
-      </select>
-    </label>
+      <details class="group" data-span="6" open>
+        <summary>Данные</summary>
+        <div class="row">
+          <label>серия:
+            <select id="seriesSelect">
+              <option value="sine">sin</option>
+              <option value="cosine">cos</option>
+              <option value="chirp">chirp (sweep)</option>
+              <option value="seasonTrend">тренд+сезонность</option>
+              <option value="gaussianNoise">нормальный шум</option>
+              <option value="randomWalk">random walk</option>
+              <option value="ar1">AR(1)</option>
+              <option value="spikes">редкие спайки</option>
+              <option value="stepJumps">ступенчатые скачки</option>
+              <option value="gaussianBell">гауссов колокол</option>
+            </select>
+          </label>
+          <span id="seriesParams" class="params"></span>
+          <label>точек: <input id="nInput" type="number" min="1000" max="5000000" step="10000" value="500000" /></label>
+          <button id="regen" title="R">Перегенерировать</button>
+        </div>
+      </details>
 
-    <label id="alphaWrap" class="hidden">α: <input id="alphaSlider" type="range" min="0" max="1" step="0.05" value="0.5" /> <b id="alphaLabel">0.50</b></label>
-    <label id="tensionWrap" class="hidden">τ: <input id="tensionSlider" type="range" min="0" max="1" step="0.05" value="0.00" /> <b id="tensionLabel">0.00</b></label>
-    <label id="betaWrap" class="hidden">β: <input id="betaSlider" type="range" min="0" max="1" step="0.05" value="0.85" /> <b id="betaLabel">0.85</b></label>
+      <details class="group" data-span="3" open>
+        <summary>Оптимизация</summary>
+        <div class="row">
+          <label><input id="useDS" type="checkbox" checked /> даунсемплинг</label>
+          <label class="rate">агрессивность: <input id="dsRate" type="range" min="1" max="16" step="1" value="1" /> <b id="dsRateLabel">1px/бин</b></label>
+        </div>
+      </details>
 
-    <!-- НОВОЕ: выбор серии и её параметры -->
-    <label>серия:
-      <select id="seriesSelect">
-        <option value="sine">sin</option>
-        <option value="cosine">cos</option>
-        <option value="chirp">chirp (sweep)</option>
-        <option value="seasonTrend">тренд+сезонность</option>
-        <option value="gaussianNoise">нормальный шум</option>
-        <option value="randomWalk">random walk</option>
-        <option value="ar1">AR(1)</option>
-        <option value="spikes">редкие спайки</option>
-        <option value="stepJumps">ступенчатые скачки</option>
-        <option value="gaussianBell">гауссов колокол</option>
-      </select>
-    </label>
-    <span id="seriesParams" class="params"></span>
+      <details class="group" data-span="3" open>
+        <summary>Отображение</summary>
+        <div class="row">
+          <label><input id="autoY" type="checkbox" checked /> авто-масштаб Y при зуме</label>
+          <label>толщина: <input id="lineWidth" type="range" min="0.5" max="3" step="0.5" value="1" /> <b id="lineWidthLabel">1.0</b></label>
+          <label>цвет: <input id="lineColor" type="color" value="#2474ff" /></label>
+        </div>
+      </details>
 
-    <label>точек: <input id="nInput" type="number" min="1000" max="5000000" step="10000" value="500000" /></label>
-    <button id="regen">Перегенерировать</button>
-    <span class="legend">кол-во точек: <b id="count">—</b> · отображается: <b id="visible">—</b></span>
+      <details class="group" data-span="6" open>
+        <summary>Интерполяция</summary>
+        <div class="row">
+          <label><input id="useInterp" type="checkbox" /> интерполяция</label>
+          <label>тип:
+            <select id="curveSelect" disabled>
+              <option value="catmullRom">Catmull–Rom</option>
+              <option value="monotoneX">Monotone X</option>
+              <option value="natural">Natural</option>
+              <option value="basis">Basis</option>
+              <option value="cardinal">Cardinal</option>
+              <option value="bundle">Bundle</option>
+              <option value="bumpX">Bump X</option>
+              <option value="step">Step</option>
+              <option value="stepBefore">Step Before</option>
+              <option value="stepAfter">Step After</option>
+              <option value="linear">Linear</option>
+            </select>
+          </label>
+          <label id="alphaWrap" class="hidden">α: <input id="alphaSlider" type="range" min="0" max="1" step="0.05" value="0.5" /> <b id="alphaLabel">0.50</b></label>
+          <label id="tensionWrap" class="hidden">τ: <input id="tensionSlider" type="range" min="0" max="1" step="0.05" value="0.00" /> <b id="tensionLabel">0.00</b></label>
+          <label id="betaWrap" class="hidden">β: <input id="betaSlider" type="range" min="0" max="1" step="0.05" value="0.85" /> <b id="betaLabel">0.85</b></label>
+        </div>
+      </details>
+
+      <details class="group" data-span="6" open>
+        <summary>Действия</summary>
+        <div class="row">
+          <button id="resetZoom" title="0">Сброс зума</button>
+          <button id="exportPng">Экспорт PNG</button>
+          <span class="muted">⎇ хоткеи: R — перегенер., 0 — сброс зума, D — даунсэмплинг, I — интерп., A — автоY, +/- — агрессивность</span>
+        </div>
+      </details>
+
+    </div>
   </div>
+
+  <!-- Chart area -->
   <div id="chart" class="chart"></div>
 </div>
 
@@ -78,10 +140,12 @@
   const DEFAULT_USE_DS = true;
   const DEFAULT_USE_INTERP = false;
   const DEFAULT_CURVE = 'catmullRom';
-  const LINE_WIDTH = 1;
-  const LINE_COLOR = "#2474ff";
   const BG_COLOR = getComputedStyle(document.body).backgroundColor || "#fff";
   const MAX_POINTS = 5_000_000;
+
+  // Рисовальные стили (управляются из UI)
+  let lineWidth = 1;
+  let lineColor = "#2474ff";
 
   // ==== Базовая сцена ====
   const dpi = Math.max(1, Math.floor(window.devicePixelRatio || 1));
@@ -107,6 +171,17 @@
     .attr("height", height)
     .style("position", "absolute")
     .style("inset", 0);
+
+  // Legend overlay
+  const legend = chart.append("div").attr("class", "legend-overlay");
+  legend.html(`
+    <div class="legend-row"><span class="muted">серия</span> <b id="legendSeries">—</b></div>
+    <div class="legend-row"><span class="muted">интерполяция</span> <span id="legendInterp">—</span></div>
+    <div class="legend-row"><span class="muted">даунсэмплинг</span> <span id="legendDS">—</span></div>
+    <div class="legend-row"><span class="muted">зума</span> <span id="legendZoom">1×</span></div>
+    <div class="legend-row"><span class="muted">точек</span> <span><b id="count">—</b> · отображается: <b id="visible">—</b></span></div>
+    <div class="legend-row"><span class="muted">линия</span> <span><span class="swatch" id="legendSwatch"></span> <span id="legendLine">#2474ff · 1px</span></span></div>
+  `);
 
   // ==== Шкалы ====
   const x = d3.scaleLinear().range([MARGIN.left, width - MARGIN.right]);
@@ -318,6 +393,12 @@
   const regenBtn = document.getElementById("regen");
   const countEl = d3.select("#count");
   const visibleEl = d3.select("#visible");
+  const zoomEl = d3.select("#legendZoom");
+  const dsEl = d3.select("#legendDS");
+  const interpEl = d3.select("#legendInterp");
+  const seriesEl = d3.select("#legendSeries");
+  const lineEl = d3.select("#legendLine");
+  const swatchEl = d3.select("#legendSwatch");
 
   const seriesSelect = document.getElementById("seriesSelect");
   const seriesParamsEl = document.getElementById("seriesParams");
@@ -414,7 +495,7 @@
     if (!points.length) return;
     ctx.save();
     ctx.beginPath(); ctx.rect(MARGIN.left, MARGIN.top, width - MARGIN.left - MARGIN.right, height - MARGIN.top - MARGIN.bottom); ctx.clip();
-    ctx.beginPath(); lineGen(points); ctx.lineWidth = LINE_WIDTH; ctx.strokeStyle = LINE_COLOR; ctx.stroke();
+    ctx.beginPath(); lineGen(points); ctx.lineWidth = lineWidth; ctx.strokeStyle = lineColor; ctx.stroke();
     ctx.restore();
   }
   function computeVisibleYDomainFromPoints(points) {
@@ -429,17 +510,17 @@
   let raf = 0;
   function scheduleRender() { cancelAnimationFrame(raf); raf = requestAnimationFrame(render); }
 
-  // ==== UI: интерполяция ====
+  // ==== UI: интерполяция/опции ====
   const autoY = document.getElementById("autoY"); autoY.checked = AUTO_RESCALE_Y; autoY.addEventListener("change", scheduleRender);
   const useDS = document.getElementById("useDS"); useDS.checked = DEFAULT_USE_DS;
   const dsRate = document.getElementById("dsRate"); const dsRateLabel = document.getElementById("dsRateLabel");
   function updateRateLabel() { dsRateLabel.textContent = `${dsRate.value}px/бин`; } updateRateLabel();
-  useDS.addEventListener("change", () => { dsRate.disabled = !useDS.checked; scheduleRender(); });
-  dsRate.addEventListener("input", () => { updateRateLabel(); scheduleRender(); });
+  useDS.addEventListener("change", () => { dsRate.disabled = !useDS.checked; scheduleRender(); updateLegendText(); });
+  dsRate.addEventListener("input", () => { updateRateLabel(); scheduleRender(); updateLegendText(); });
   dsRate.disabled = !useDS.checked;
 
-  const useInterp = document.getElementById("useInterp"); useInterp.checked = DEFAULT_USE_INTERP;
-  const curveSelect = document.getElementById("curveSelect"); curveSelect.value = DEFAULT_CURVE;
+  const useInterp = document.getElementById("useInterp"); useInterp.checked = DEFAULT_USE_INTERP; useInterp.addEventListener('change', updateLegendText);
+  const curveSelect = document.getElementById("curveSelect"); curveSelect.value = DEFAULT_CURVE; curveSelect.addEventListener('change', updateLegendText);
 
   const alphaWrap = document.getElementById("alphaWrap");
   const tensionWrap = document.getElementById("tensionWrap");
@@ -485,7 +566,35 @@
   tensionSlider.addEventListener('input', () => { updateParamLabels(); applyCurve(); scheduleRender(); });
   betaSlider.addEventListener('input', () => { updateParamLabels(); applyCurve(); scheduleRender(); });
 
+  // Отображение: толщина + цвет
+  const lw = document.getElementById('lineWidth');
+  const lwLabel = document.getElementById('lineWidthLabel');
+  const lc = document.getElementById('lineColor');
+  lw.addEventListener('input', () => { lineWidth = parseFloat(lw.value) || 1; lwLabel.textContent = lineWidth.toFixed(1); updateLegendText(); scheduleRender(); });
+  lc.addEventListener('input', () => { lineColor = lc.value || '#2474ff'; updateLegendText(); scheduleRender(); });
+
   // ==== Рендер ====
+  function updateLegendText() {
+    const dsText = useDS.checked ? `on (${dsRate.value}px/бин)` : 'off';
+    dsEl.text(dsText);
+
+    let interpText = 'linear';
+    if (useInterp.checked) {
+      const sel = curveSelect.value;
+      if (sel === 'catmullRom') interpText = `Catmull–Rom α=${fmt2(alphaSlider.value)}`;
+      else if (sel === 'cardinal') interpText = `Cardinal τ=${fmt2(tensionSlider.value)}`;
+      else if (sel === 'bundle') interpText = `Bundle β=${fmt2(betaSlider.value)}`;
+      else interpText = sel;
+    } else interpText = 'off';
+    interpEl.text(interpText);
+
+    const def = DATASETS[seriesSelect.value];
+    seriesEl.text(def.label);
+
+    swatchEl.style('background', lineColor);
+    lineEl.text(`${lineColor} · ${lineWidth.toFixed(1)}px`);
+  }
+
   function render() {
     clearCanvas();
     let points = [];
@@ -504,6 +613,11 @@
 
     drawAxes();
     visibleEl.text(points.length.toLocaleString("en-US"));
+
+    // Zoom label
+    const z = (x0.domain()[1] - x0.domain()[0]) / Math.max(1e-9, (x.domain()[1] - x.domain()[0]));
+    zoomEl.text(`${z.toFixed(2)}×`);
+
     drawLine(points);
   }
 
@@ -534,6 +648,7 @@
 
     overlay.call(zoom.transform, d3.zoomIdentity);
     drawAxes(); scheduleRender();
+    updateLegendText();
   }
 
   seriesSelect.addEventListener("change", () => { buildParamsUI(); setData(nInput.value); });
@@ -541,6 +656,27 @@
   const nEl = document.getElementById("nInput");
   regenBtn.addEventListener("click", () => setData(nEl.value));
   nEl.addEventListener("keydown", (e) => { if (e.key === "Enter") setData(nEl.value); });
+
+  // Actions
+  document.getElementById('resetZoom').addEventListener('click', () => overlay.call(zoom.transform, d3.zoomIdentity));
+  document.getElementById('exportPng').addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.download = `chart-${Date.now()}.png`;
+    a.href = canvas.toDataURL('image/png'); // только канвас (оси — SVG) для простоты
+    a.click();
+  });
+
+  // Хоткеи
+  window.addEventListener('keydown', (e) => {
+    if (e.target && ['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)) return;
+    if (e.key === 'r' || e.key === 'R') { regenBtn.click(); }
+    else if (e.key === '0') { overlay.call(zoom.transform, d3.zoomIdentity); }
+    else if (e.key === 'd' || e.key === 'D') { const v = !useDS.checked; useDS.checked = v; useDS.dispatchEvent(new Event('change')); }
+    else if (e.key === 'i' || e.key === 'I') { const v = !useInterp.checked; useInterp.checked = v; useInterp.dispatchEvent(new Event('change')); updateLegendText(); }
+    else if (e.key === 'a' || e.key === 'A') { autoY.checked = !autoY.checked; scheduleRender(); }
+    else if (e.key === '+') { const v = Math.min(parseInt(dsRate.max,10), (parseInt(dsRate.value,10)||1) + 1); dsRate.value = String(v); dsRate.dispatchEvent(new Event('input')); }
+    else if (e.key === '-') { const v = Math.max(parseInt(dsRate.min,10), (parseInt(dsRate.value,10)||1) - 1); dsRate.value = String(v); dsRate.dispatchEvent(new Event('input')); }
+  });
 
   // Старт
   buildParamsUI();
