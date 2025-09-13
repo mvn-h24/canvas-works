@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Canvas D3 — фикс масштаба/зума (таблица+генераторы)</title>
+<title>CanvasD3</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -1845,12 +1845,52 @@
       scheduleRender();
       hideCursor();
     });
+
     document.getElementById('exportPng').addEventListener('click', () => {
-      const a = document.createElement('a');
-      a.download = `chart-${Date.now()}.png`;
-      a.href = canvas.toDataURL('image/png');
-      a.click();
+      // 1) Offscreen canvas at device pixels
+      const off = document.createElement('canvas');
+      off.width  = canvas.width;   // width * dpi
+      off.height = canvas.height;  // height * dpi
+      const octx = off.getContext('2d');
+
+      // 2) Solid background
+      octx.fillStyle = 'rgba(0,0,0,1)';
+      octx.fillRect(0, 0, off.width, off.height);
+
+      // 3) Draw current chart pixels
+      octx.drawImage(canvas, 0, 0);
+
+      // 4) Build a minimal SVG that contains only the axes, scaled for DPR.
+      //    We use viewBox to map CSS units (width/height) -> device pixels.
+      const svgExport = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svgExport.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      svgExport.setAttribute('width',  off.width);
+      svgExport.setAttribute('height', off.height);
+      svgExport.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+      // carry over font so tick labels look the same
+      svgExport.setAttribute('style', `font: ${getComputedStyle(document.body).font}; color: ${getComputedStyle(document.body).color};`);
+
+      // Clone ONLY axes groups to avoid cursor/overlay noise
+      const gxClone = gx.node().cloneNode(true);
+      const gyClone = gy.node().cloneNode(true);
+      svgExport.appendChild(gxClone);
+      svgExport.appendChild(gyClone);
+
+      // 5) Serialize axes-SVG -> Image -> draw on offscreen canvas
+      const svgStr = new XMLSerializer().serializeToString(svgExport);
+      const img = new Image();
+      img.onload = () => {
+        octx.drawImage(img, 0, 0, off.width, off.height);
+        // 6) Download
+        const a = document.createElement('a');
+        a.download = `chart-${Date.now()}.png`;
+        a.href = off.toDataURL('image/png');
+        a.click();
+      };
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr);
     });
+
 
     window.addEventListener('keydown', (e) => {
       const tag = (e.target && e.target.tagName) || '';
