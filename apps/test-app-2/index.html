@@ -1524,14 +1524,17 @@
       const minDx = currentMinDx();
       if (w <= 2 * minDx) {
         const cx = (xs + xe) / 2;
-        const target = isTable ? nearestInSorted(tableAllX, cx) : Math.round(cx);
+        let target = isTable ? nearestInSorted(tableAllX, cx) : Math.round(cx);
+        if (!isTable) target = clamp(target, 0, Math.max(0, N - 1));
         const cur = (x.domain()[0] + x.domain()[1]) / 2;
         if (Number.isFinite(target) && Math.abs(cur - target) > (minDx * 1e-6)) {
           _snapBusy = true;
           // Defer to next frame to avoid nested dispatch inside current handler
           requestAnimationFrame(() => {
             try {
-              overlay.call(zoom.translateTo, target, 0);
+              const px = x0(target); // data→pixels
+              const py = (MARGIN.top + (height - MARGIN.bottom)) / 2;
+              overlay.call(zoom.translateTo, px, py);
             } finally {
               _snapBusy = false;
             }
