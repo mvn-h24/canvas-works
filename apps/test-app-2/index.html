@@ -76,6 +76,11 @@
     border-radius: 10px;
     padding: 2px 6px 8px;
     background: color-mix(in oklab, Canvas, transparent 5%);
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-auto-flow: row;
+    grid-auto-rows: auto;
+    gap: 5px;
   }
 
   .group > summary {
@@ -90,6 +95,14 @@
     flex-wrap: wrap;
     gap: 10px 12px;
     align-items: center;
+  }
+
+  .column {
+    display: flex;
+    flex-direction: column;
+    flex-wrap: wrap;
+    gap: 10px 12px;
+    align-items: start;
   }
 
   .row label {
@@ -398,27 +411,40 @@
               <input id="betaSlider" type="range" min="0" max="1" step="0.05" value="0.85" />
               <b id="betaLabel">0.85</b>
             </label>
+            <span class="muted">⎇: I — интерп</span>
           </div>
+
         </details>
 
         <!-- Курсор / Snap -->
         <details class="group" open>
           <summary>Курсор</summary>
           <div class="row">
-            <label><input id="alwaysSnap" type="checkbox" /> всегда снапать</label>
-            <span class="muted">С зажатым <kbd>Shift</kbd> — временный снап; чекбокс — постоянный.</span>
+            <label><input id="alwaysSnap" type="checkbox" /> удерживать span</label>
+            <span class="muted">⎇: удерживайте <kbd>Shift</kbd> или нажмите S </span>
           </div>
         </details>
 
-        <!-- Оптимизация -->
+
         <details class="group" open>
-          <summary>Оптимизация</summary>
+          <summary>Зум</summary>
+          <div class="column">
+            <div class="row">
+              <label>
+                <input id="zoomY" type="checkbox" /> зум по Y <span class="muted">⎇: Y</span>
+              </label>
+              <span class=" muted">Колесо/жесты приближают область под курсором по обеим осям.</span>
+            </div>
+            <div class="row">
+              <button id="resetZoom" title="0">Сброс зума</button>
+              <span class="muted">⎇: 0 — сброс зума</span>
+            </div>
+          </div>
+      </details>
+
+      <details class="group" open>
+          <summary>Стилизация</summary>
           <div class="row">
-            <label><input id="useDS" type="checkbox" checked /> даунсемплинг</label>
-            <label class="rate">агрессивность:
-              <input id="dsRate" type="range" min="1" max="16" step="1" value="1" />
-              <b id="dsRateLabel">1px/бин</b>
-            </label>
             <label>толщина:
               <input id="lineWidth" type="range" min="0.5" max="3" step="0.5" value="1" />
               <b id="lineWidthLabel">1.0</b>
@@ -430,17 +456,37 @@
         <!-- Действия -->
         <details class="group" open>
           <summary>Действия</summary>
+          <div class="column">
+            <div class="row">
+              <button id="runTests" title="T">Запустить тесты</button>
+              <span class="muted">⎇: T — тесты</span>
+            </div>
+            <div class="row">
+              <button id="exportPng">Экспорт PNG</button>
+            </div>
+            <div class="row">
+              <span class="muted">⎇: R — перегенер</span>
+            </div>
+          </div>
+        </details>
+
+
+        <!-- Оптимизация -->
+        <details class="group" open>
+          <summary>Оптимизация</summary>
           <div class="row">
-            <button id="resetZoom" title="0">Сброс зума</button>
-            <button id="exportPng">Экспорт PNG</button>
-            <button id="runTests" title="T">Запустить тесты</button>
-            <span class="muted">⎇ хоткеи: R — перегенер., 0 — сброс зума, D — даунсэмпл., I — интерп., +/- — агрессивность, Shift — снап, S — переключить «всегда снапать», T — тесты</span>
+            <label><input id="useDS" type="checkbox" checked /> даунсемплинг</label>
+            <label class="rate">агрессивность:
+              <input id="dsRate" type="range" min="1" max="16" step="1" value="1" />
+              <b id="dsRateLabel">1px/бин</b>
+            </label>
+            <span class="muted">⎇: D — даунсэмпл., +/- — агрессивность</span>
           </div>
         </details>
       </div>
-    </aside>
+  </aside>
 
-    <div id="drawerBackdrop" class="drawer-backdrop" aria-hidden="true"></div>
+  <div id="drawerBackdrop" class="drawer-backdrop" aria-hidden="true"></div>
 
     <main>
       <div id="chart" class="chart"></div>
@@ -872,6 +918,8 @@
     const lineColorWrap = document.getElementById('lineColorWrap');
     const alwaysSnapEl = document.getElementById('alwaysSnap');
     const runTestsBtn = document.getElementById('runTests');
+    const zoomYEl = document.getElementById('zoomY');
+    const isZoomY = () => !!zoomYEl?.checked;
 
     function buildParamsUI() {
       if (seriesSelect.value === 'table') {
@@ -1494,8 +1542,16 @@
       .on('start', () => hideCursor())
       .on('zoom', (ev) => {
         const t = ev.transform;
+// Always rescale X
         const zx = t.rescaleX(x0);
         x.domain(zx.domain());
+// Optionally rescale Y
+        if (isZoomY()) {
+          const zy = t.rescaleY(y0);
+          y.domain(zy.domain());
+        }
+        drawAxes();
+        updateZoomLegend();
         scheduleRender();
       });
 
@@ -1533,7 +1589,15 @@
           requestAnimationFrame(() => {
             try {
               const px = x0(target); // data→pixels
-              const py = (MARGIN.top + (height - MARGIN.bottom)) / 2;
+              let py = (MARGIN.top + (height - MARGIN.bottom)) / 2; // old center
+              if (isZoomY()) {
+                const xsnap = target; // snapped X in data units
+                const inters = getIntersectionsAtX(xsnap);
+                if (inters.length) {
+// center finish around the nearest series value at that X using the base scale
+                  py = y0(inters[0].y);
+                }
+              }
               overlay.call(zoom.translateTo, px, py);
             } finally {
               _snapBusy = false;
@@ -1682,6 +1746,17 @@
       updateLegendText();
     }
 
+    function zoomFactors() {
+      const zx = (x0.domain()[1] - x0.domain()[0]) / Math.max(1e-9, (x.domain()[1] - x.domain()[0]));
+      const zy = (y0.domain()[1] - y0.domain()[0]) / Math.max(1e-9, (y.domain()[1] - y.domain()[0]));
+      return { zx, zy };
+    }
+
+    function updateZoomLegend() {
+      const { zx, zy } = zoomFactors();
+      zoomEl.text(isZoomY() ? `X ${zx.toFixed(2)}× · Y ${zy.toFixed(2)}×` : `${zx.toFixed(2)}×`);
+    }
+
     tableWrap.addEventListener('paste', (e) => {
       const txt = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
       if (!txt) return;
@@ -1737,6 +1812,7 @@
       drawAxes();
       scheduleRender();
       updateLegendText();
+      updateZoomLegend();
     }
 
     function onSeriesChange() {
@@ -1750,6 +1826,7 @@
       } else {
         setData(nInput.value);
       }
+      updateZoomLegend();
     }
 
     seriesSelect.addEventListener('change', onSeriesChange);
@@ -1761,6 +1838,11 @@
 
     document.getElementById('resetZoom').addEventListener('click', () => {
       overlay.call(zoom.transform, d3.zoomIdentity);
+      x.domain(x0.domain());
+      y.domain(y0.domain());
+      drawAxes();
+      updateZoomLegend();
+      scheduleRender();
       hideCursor();
     });
     document.getElementById('exportPng').addEventListener('click', () => {
@@ -1805,6 +1887,10 @@
         alwaysSnapEl.checked = !alwaysSnapEl.checked;
       } else if (e.key === 't' || e.key === 'T') {
         runTests();
+      } else if (e.key === 'y' || e.key === 'Y') {
+        zoomYEl.checked = !zoomYEl.checked;
+        updateZoomLegend();
+        render();
       }
     });
 
@@ -1876,12 +1962,12 @@
           visiblePointsAll += pts.length;
           yVis.push(...pts);
         });
-        // Y-фрейм фиксирован (отказ от авто-масштаба)
-        y.domain(y0.domain());
+        // Фиксируем Y только если Y-зум выключен
+        if (!isZoomY()) y.domain(y0.domain());
         drawAxes();
         visibleEl.text(visiblePointsAll.toLocaleString('en-US'));
         const z = (x0.domain()[1] - x0.domain()[0]) / Math.max(1e-9, (x.domain()[1] - x.domain()[0]));
-        zoomEl.text(`${z.toFixed(2)}×`);
+        updateZoomLegend();
         tableSeries.forEach(s => {
           drawLine(s._visiblePoints || [], s.color);
           s._poly = buildPolyline(s._visiblePoints || []);
@@ -1909,7 +1995,7 @@
       drawAxes();
       visibleEl.text(points.length.toLocaleString('en-US'));
       const z = (x0.domain()[1] - x0.domain()[0]) / Math.max(1e-9, (x.domain()[1] - x.domain()[0]));
-      zoomEl.text(`${z.toFixed(2)}×`);
+      updateZoomLegend();
       drawLine(points);
       renderPoints = points;
       renderPolyline = buildPolyline(points);
