@@ -1395,30 +1395,96 @@
         return;
       }
 
+
       const xvRaw = x.invert(mxRaw);
+      const [xs, xe] = x.domain(); // current visible x-domain
       const isTable = seriesSelect.value === 'table';
       const snapped = !!alwaysSnapEl.checked || isShift;
+
+
       let xv = xvRaw;
       if (snapped) {
-        if (isTable) xv = nearestInSorted(tableAllX, xvRaw);
-        else xv = Math.round(clamp(xvRaw, 0, Math.max(0, N - 1)));
+        if (isTable) {
+// STRICT: only consider table X that fall within [xs, xe]
+          xv = nearestInVisibleDomain(tableAllX, xvRaw, xs, xe);
+        } else {
+// For non-table series: keep original rounding, then clamp to [xs, xe]
+          xv = Math.round(clamp(xvRaw, 0, Math.max(0, N - 1)));
+        }
+// Ensure snapped X never escapes current view
+        xv = clamp(xv, xs, xe);
       }
 
-      const mx = x(xv);
+
+// Safety: pixel clamp as well
+      const mx = clamp(x(xv), MARGIN.left, width - MARGIN.right);
       const intersections = getIntersectionsAtX(xv);
+
 
       cursorG.classed('snapped', snapped);
       cursorLine.attr('x1', mx).attr('x2', mx);
 
+
       const dots = cursorDotsG.selectAll('circle').data(intersections);
-      dots.join(
-        enter => enter.append('circle').attr('r', 3).attr('fill', '#fff').attr('stroke-width', 2),
-        update => update,
-        exit => exit.remove()
-      ).attr('cx', d => x(d.x)).attr('cy', d => y(d.y)).attr('stroke', d => d.color).attr('r', snapped ? 4 : 3);
+      dots
+        .join(
+          enter => enter.append('circle').attr('r', 3).attr('fill', '#fff').attr('stroke-width', 2),
+          update => update,
+          exit => exit.remove()
+        )
+        .attr('cx', d => x(d.x))
+        .attr('cy', d => y(d.y))
+        .attr('stroke', d => d.color)
+        .attr('r', snapped ? 4 : 3);
+
 
       updateTooltip(mx, my, xv, intersections, snapped);
       showCursor();
+    }
+
+// --- Helper: nearest X within the visible domain only ---
+// arr must be sorted ascending.
+    function nearestInVisibleDomain(arr, v, xs, xe) {
+      const start = lowerBound(arr, xs); // first index with arr[i] >= xs
+      const endEx = upperBound(arr, xe); // first index with arr[i] > xe (exclusive end)
+
+
+      if (start >= endEx) {
+// No points inside current view — snap to the border
+        return clamp(v, xs, xe);
+      }
+
+
+// Find insertion position for v within [start, endEx)
+      const pos = lowerBound(arr, v, start, endEx);
+      if (pos <= start) return arr[start]; // v <= first visible point
+      if (pos >= endEx) return arr[endEx - 1]; // v > last visible point
+
+
+// Choose nearer between arr[pos - 1] and arr[pos]
+      const left = arr[pos - 1];
+      const right = arr[pos];
+      return (v - left <= right - v) ? left : right;
+    }
+
+
+// lowerBound: first index in [lo, hi) where arr[i] >= target
+    function lowerBound(arr, target, lo = 0, hi = arr.length) {
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (arr[mid] < target) lo = mid + 1; else hi = mid;
+      }
+      return lo;
+    }
+
+
+// upperBound: first index in [lo, hi) where arr[i] > target
+    function upperBound(arr, target, lo = 0, hi = arr.length) {
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (arr[mid] <= target) lo = mid + 1; else hi = mid;
+      }
+      return lo;
     }
 
     // ====== Zoom with dynamic limits + snap-to-point at extreme zoom
