@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CanvasD3</title>
+<title>Canvas D3 — фикс масштаба/зума (таблица+генераторы)</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -30,7 +30,6 @@
     flex-grow: 1;
   }
 
-  /* Layout */
   .layout {
     flex-grow: 1;
     display: grid;
@@ -39,7 +38,6 @@
     align-items: start;
   }
 
-  /* Drawer / Sidebar */
   .drawer {
     position: sticky;
     top: 12px;
@@ -68,7 +66,6 @@
     display: none;
   }
 
-  /* Controls grid inside drawer */
   .groups {
     display: grid;
     gap: 10px;
@@ -119,7 +116,6 @@
     cursor: pointer;
   }
 
-  /* Chart */
   .chart {
     position: relative;
     user-select: none;
@@ -129,7 +125,6 @@
     shape-rendering: crispEdges;
   }
 
-  /* Legend overlay */
   .legend-overlay {
     position: absolute;
     right: 10px;
@@ -162,7 +157,6 @@
     opacity: .75;
   }
 
-  /* Mobile drawer */
   .drawer-toggle {
     position: fixed;
     left: 16px;
@@ -217,16 +211,112 @@
     }
   }
 
-  /* Helpers */
   .hidden {
     display: none !important;
+  }
+
+  .tableBar {
+    gap: 8px;
+  }
+
+  .tableWrap {
+    max-height: 260px;
+    overflow: auto;
+    margin-top: 6px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in oklab, CanvasText, transparent 85%);
+  }
+
+  table.data {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 12px;
+  }
+
+  table.data thead th {
+    position: sticky;
+    top: 0;
+    background: color-mix(in oklab, Canvas, transparent 5%);
+    z-index: 1;
+  }
+
+  table.data th, table.data td {
+    border: 1px solid color-mix(in oklab, CanvasText, transparent 88%);
+    padding: 0;
+  }
+
+  table.data td input {
+    width: 100%;
+    padding: 6px 8px;
+    border: 0;
+    outline: none;
+    background: transparent;
+    font: inherit;
+    text-align: right;
+  }
+
+  table.data th {
+    padding: 6px 8px;
+    text-align: left;
+  }
+
+  .tip {
+    font-size: 11px;
+    margin-top: 6px;
+  }
+
+  .series-legend {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 8px;
+    margin-top: 6px;
+    font-size: 11px;
+  }
+
+  .cursor-tooltip {
+    position: absolute;
+    z-index: 4;
+    padding: 8px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    line-height: 1.35;
+    background: color-mix(in oklab, Canvas, transparent 6%);
+    border: 1px solid color-mix(in oklab, CanvasText, transparent 85%);
+    pointer-events: none;
+    max-width: 46ch;
+    box-shadow: 0 2px 8px color-mix(in oklab, black, transparent 85%);
+  }
+
+  .cursor-tooltip .title {
+    font-weight: 600;
+    margin-bottom: 4px;
+    opacity: .85;
+  }
+
+  /* snapped look */
+  .cursor.snapped line {
+    stroke-dasharray: 3 3;
+    stroke-width: 2;
+  }
+
+  /* Tiny badge for test status (optional) */
+  .test-badge {
+    position: fixed;
+    bottom: 10px;
+    right: 10px;
+    z-index: 50;
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in oklab, CanvasText, transparent 80%);
+    background: color-mix(in oklab, Canvas, transparent 10%);
   }
 </style>
 
 <div id="wrap">
   <button id="drawerToggle" class="drawer-toggle" aria-controls="sidebar" aria-expanded="false">☰ Настройки</button>
   <div class="layout">
-    <!-- Sidebar / Drawer -->
     <aside id="sidebar" class="drawer" aria-label="Панель настроек">
       <div class="drawer-header">
         <div class="drawer-title">Настройки</div>
@@ -234,7 +324,7 @@
       </div>
 
       <div class="groups">
-        <!-- ДАННЫЕ -->
+        <!-- Данные -->
         <details class="group" open>
           <summary>Данные</summary>
           <div class="row">
@@ -250,17 +340,33 @@
                 <option value="spikes">редкие спайки</option>
                 <option value="stepJumps">ступенчатые скачки</option>
                 <option value="gaussianBell">гауссов колокол</option>
+                <option value="table">таблица (точки)</option>
               </select>
             </label>
             <span id="seriesParams" class="params"></span>
-            <label>точек:
+            <label id="nWrap">точек:
               <input id="nInput" type="number" min="1000" max="5000000" step="10000" value="500000" />
             </label>
             <button id="regen" title="R">Перегенерировать</button>
           </div>
+
+          <!-- UI ДЛЯ ТАБЛИЧНОГО РЕЖИМА -->
+          <div id="tableBar" class="row tableBar hidden">
+            <button id="addCol">Добавить колонку</button>
+            <button id="addRow">Добавить точку</button>
+            <span class="muted">Столбец X общий; каждый Y — отдельная кривая.</span>
+          </div>
+          <div id="tableWrap" class="tableWrap hidden">
+            <table id="pointsTable" class="data" aria-label="Таблица точек">
+              <thead><tr id="theadRow"></tr></thead>
+              <tbody id="tbody"></tbody>
+            </table>
+            <div class="tip muted">Вставка из Excel/Google Sheets: скопируйте диапазон (X в первом столбце, Y1..Yn далее) → клик по таблице → <kbd>Ctrl</kbd>+<kbd>V</kbd>.</div>
+            <div id="seriesLegend" class="series-legend"></div>
+          </div>
         </details>
 
-        <!-- ИНТЕРПОЛЯЦИЯ -->
+        <!-- Интерполяция -->
         <details class="group" open>
           <summary>Интерполяция</summary>
           <div class="row">
@@ -295,7 +401,16 @@
           </div>
         </details>
 
-        <!-- ОПТИМИЗАЦИЯ -->
+        <!-- Курсор / Snap -->
+        <details class="group" open>
+          <summary>Курсор</summary>
+          <div class="row">
+            <label><input id="alwaysSnap" type="checkbox" /> всегда снапать</label>
+            <span class="muted">С зажатым <kbd>Shift</kbd> — временный снап; чекбокс — постоянный.</span>
+          </div>
+        </details>
+
+        <!-- Оптимизация -->
         <details class="group" open>
           <summary>Оптимизация</summary>
           <div class="row">
@@ -304,217 +419,231 @@
               <input id="dsRate" type="range" min="1" max="16" step="1" value="1" />
               <b id="dsRateLabel">1px/бин</b>
             </label>
-            <label><input id="autoY" type="checkbox" checked /> авто-масштаб Y при зуме</label>
             <label>толщина:
               <input id="lineWidth" type="range" min="0.5" max="3" step="0.5" value="1" />
               <b id="lineWidthLabel">1.0</b>
             </label>
-            <label>цвет: <input id="lineColor" type="color" value="#2474ff" /></label>
+            <label id="lineColorWrap">цвет: <input id="lineColor" type="color" value="#2474ff" /></label>
           </div>
         </details>
 
-        <!-- ДЕЙСТВИЯ -->
+        <!-- Действия -->
         <details class="group" open>
           <summary>Действия</summary>
           <div class="row">
             <button id="resetZoom" title="0">Сброс зума</button>
             <button id="exportPng">Экспорт PNG</button>
-            <span class="muted">⎇ хоткеи: R — перегенер., 0 — сброс зума, D — даунсэмпл., I — интерп., A — автоY, +/- — агрессивность</span>
+            <button id="runTests" title="T">Запустить тесты</button>
+            <span class="muted">⎇ хоткеи: R — перегенер., 0 — сброс зума, D — даунсэмпл., I — интерп., +/- — агрессивность, Shift — снап, S — переключить «всегда снапать», T — тесты</span>
           </div>
         </details>
       </div>
     </aside>
 
-    <!-- Backdrop for mobile -->
     <div id="drawerBackdrop" class="drawer-backdrop" aria-hidden="true"></div>
 
-    <!-- Chart area -->
     <main>
       <div id="chart" class="chart"></div>
     </main>
   </div>
 </div>
 
+<div id="testBadge" class="test-badge" style="display:none"></div>
+
 <script type="module">
   import * as d3 from 'https://cdn.jsdelivr.net/npm/d3@7/+esm';
 
-  // ==== Drawer logic ====
-  const root = document.documentElement;
-  const sidebar = document.getElementById('sidebar');
-  const toggleBtn = document.getElementById('drawerToggle');
-  const closeBtn = document.getElementById('drawerClose');
-  const backdrop = document.getElementById('drawerBackdrop');
-  const mqDesktop = window.matchMedia('(min-width: 880px)');
+  // Run only when DOM is ready
+  (document.readyState === 'loading') ? document.addEventListener('DOMContentLoaded', init) : init();
 
-  function setDrawer(open) {
-    const isDesktop = mqDesktop.matches;
-    if (isDesktop) {
-      // always open on desktop; hide toggle
-      toggleBtn.setAttribute('aria-expanded', 'true');
-      toggleBtn.style.display = 'none';
-      sidebar.classList.add('open');
-      root.classList.remove('drawer-open');
-      return;
+  function init() {
+    // ===== Drawer logic
+    const root = document.documentElement;
+    const sidebar = document.getElementById('sidebar');
+    const toggleBtn = document.getElementById('drawerToggle');
+    const closeBtn = document.getElementById('drawerClose');
+    const backdrop = document.getElementById('drawerBackdrop');
+    const mqDesktop = window.matchMedia('(min-width: 880px)');
+
+    function setDrawer(open) {
+      const isDesktop = mqDesktop.matches;
+      if (isDesktop) {
+        toggleBtn.setAttribute('aria-expanded', 'true');
+        toggleBtn.style.display = 'none';
+        sidebar.classList.add('open');
+        root.classList.remove('drawer-open');
+        return;
+      }
+      toggleBtn.style.display = '';
+      sidebar.classList.toggle('open', open);
+      toggleBtn.setAttribute('aria-expanded', String(open));
+      root.classList.toggle('drawer-open', open);
     }
-    toggleBtn.style.display = '';
-    sidebar.classList.toggle('open', open);
-    toggleBtn.setAttribute('aria-expanded', String(open));
-    root.classList.toggle('drawer-open', open);
-  }
 
-  toggleBtn.addEventListener('click', () => setDrawer(!sidebar.classList.contains('open')));
-  closeBtn.addEventListener('click', () => setDrawer(false));
-  backdrop.addEventListener('click', () => setDrawer(false));
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') setDrawer(false);
-  });
-  mqDesktop.addEventListener('change', () => setDrawer(mqDesktop.matches));
+    toggleBtn?.addEventListener('click', () => setDrawer(!sidebar.classList.contains('open')));
+    closeBtn?.addEventListener('click', () => setDrawer(false));
+    backdrop?.addEventListener('click', () => setDrawer(false));
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') setDrawer(false);
+    });
+    mqDesktop.addEventListener('change', () => setDrawer(mqDesktop.matches));
+    setDrawer(mqDesktop.matches);
 
-  setDrawer(mqDesktop.matches); // initial
+    // ===== Config
+    const SIZE = { width: 960, height: 420 };
+    const MARGIN = { top: 16, right: 20, bottom: 28, left: 48 };
+    const DEFAULT_USE_DS = true;
+    const DEFAULT_USE_INTERP = false;
+    const DEFAULT_CURVE = 'catmullRom';
+    const BG_COLOR = getComputedStyle(document.body).backgroundColor || '#fff';
+    const MAX_POINTS = 5_000_000;
 
-  // ==== Конфиг ====
-  const SIZE = { width: 960, height: 420 };
-  const MARGIN = { top: 16, right: 20, bottom: 28, left: 48 };
-  const AUTO_RESCALE_Y = true;
-  const DEFAULT_USE_DS = true;
-  const DEFAULT_USE_INTERP = false;
-  const DEFAULT_CURVE = 'catmullRom';
-  const BG_COLOR = getComputedStyle(document.body).backgroundColor || '#fff';
-  const MAX_POINTS = 5_000_000;
+    let lineWidth = 1;
+    let lineColor = '#2474ff';
 
-  // Рисовальные стили (управляются из UI)
-  let lineWidth = 1;
-  let lineColor = '#2474ff';
+    const dpi = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+    const width = SIZE.width;
+    const height = SIZE.height;
 
-  // ==== Базовая сцена ====
-  const dpi = Math.max(1, Math.floor(window.devicePixelRatio || 1));
-  const width = SIZE.width;
-  const height = SIZE.height;
+    const chart = d3.select('#chart').style('width', `${width}px`).style('height', `${height}px`);
+    const canvas = chart.append('canvas').attr('width', width * dpi).attr('height', height * dpi).style('width', `${width}px`).style('height', `${height}px`).node();
+    const ctx = canvas.getContext('2d', { desynchronized: true }) || canvas.getContext('2d');
+    ctx.scale(dpi, dpi);
+    const svg = chart.append('svg').attr('width', width).attr('height', height).style('position', 'absolute').style('inset', 0);
 
-  const chart = d3.select('#chart')
-    .style('width', `${width}px`)
-    .style('height', `${height}px`);
+    const legend = chart.append('div').attr('class', 'legend-overlay');
+    legend.html(`
+      <div class="legend-row"><span class="muted">серия</span> <b id="legendSeries">—</b></div>
+      <div class="legend-row"><span class="muted">интерполяция</span> <span id="legendInterp">—</span></div>
+      <div class="legend-row"><span class="muted">даунсемплинг</span> <span id="legendDS">—</span></div>
+      <div class="legend-row"><span class="muted">зум</span> <span id="legendZoom">1×</span></div>
+      <div class="legend-row"><span class="muted">точек</span> <span><b id="count">—</b> · отображается: <b id="visible">—</b></span></div>
+      <div class="legend-row"><span class="muted">линия</span> <span><span class="swatch" id="legendSwatch"></span> <span id="legendLine">#2474ff · 1px</span></span></div>
+    `);
 
-  const canvas = chart.append('canvas')
-    .attr('width', width * dpi)
-    .attr('height', height * dpi)
-    .style('width', `${width}px`)
-    .style('height', `${height}px`)
-    .node();
+    const x = d3.scaleLinear().range([MARGIN.left, width - MARGIN.right]);
+    const y = d3.scaleLinear().range([height - MARGIN.bottom, MARGIN.top]);
+    const x0 = x.copy();
+    const y0 = y.copy();
 
-  const ctx = canvas.getContext('2d', { desynchronized: true }) || canvas.getContext('2d');
-  ctx.scale(dpi, dpi);
+    const gx = svg.append('g').attr('class', 'axis x').attr('transform', `translate(0,${height - MARGIN.bottom})`);
+    const gy = svg.append('g').attr('class', 'axis y').attr('transform', `translate(${MARGIN.left},0)`);
 
-  const svg = chart.append('svg')
-    .attr('width', width)
-    .attr('height', height)
-    .style('position', 'absolute')
-    .style('inset', 0);
-
-  // Legend overlay
-  const legend = chart.append('div').attr('class', 'legend-overlay');
-  legend.html(`
-    <div class="legend-row"><span class="muted">серия</span> <b id="legendSeries">—</b></div>
-    <div class="legend-row"><span class="muted">интерполяция</span> <span id="legendInterp">—</span></div>
-    <div class="legend-row"><span class="muted">даунсэмплинг</span> <span id="legendDS">—</span></div>
-    <div class="legend-row"><span class="muted">зум</span> <span id="legendZoom">1×</span></div>
-    <div class="legend-row"><span class="muted">точек</span> <span><b id="count">—</b> · отображается: <b id="visible">—</b></span></div>
-    <div class="legend-row"><span class="muted">линия</span> <span><span class="swatch" id="legendSwatch"></span> <span id="legendLine">#2474ff · 1px</span></span></div>
-  `);
-
-  // ==== Шкалы ====
-  const x = d3.scaleLinear().range([MARGIN.left, width - MARGIN.right]);
-  const y = d3.scaleLinear().range([height - MARGIN.bottom, MARGIN.top]);
-  const x0 = x.copy();
-  const y0 = y.copy();
-
-  // ==== Оси ====
-  const gx = svg.append('g').attr('class', 'axis x').attr('transform', `translate(0,${height - MARGIN.bottom})`);
-  const gy = svg.append('g').attr('class', 'axis y').attr('transform', `translate(${MARGIN.left},0)`);
-
-  function drawAxes() {
-    gx.call(d3.axisBottom(x).ticks(Math.floor(width / 80)));
-    gy.call(d3.axisLeft(y).ticks(Math.floor(height / 50)));
-  }
-
-  // ==== Хелперы ====
-  function extentFloat32(arr) {
-    let mn = +Infinity, mx = -Infinity;
-    for (let i = 0; i < arr.length; i++) {
-      const v = arr[i];
-      if (v < mn) mn = v;
-      if (v > mx) mx = v;
+    function drawAxes() {
+      gx.call(d3.axisBottom(x).ticks(Math.floor(width / 80)));
+      gy.call(d3.axisLeft(y).ticks(Math.floor(height / 50)));
     }
-    if (mn === mx) {
-      const eps = Math.abs(mn || 1) * 1e-6;
-      mn -= eps;
-      mx += eps;
+
+    function extentFloat32(arr) {
+      let mn = +Infinity, mx = -Infinity;
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      if (mn === mx) {
+        const eps = Math.abs(mn || 1) * 1e-6;
+        mn -= eps;
+        mx += eps;
+      }
+      return [mn, mx];
     }
-    return [mn, mx];
-  }
 
-  function clamp(n, min, max) {
-    return Math.min(max, Math.max(min, n));
-  }
-
-  // Быстрая гауссовская выборка (Box–Muller с кешем)
-  let _bmHas = false, _bmSpare = 0;
-
-  function randn() {
-    if (_bmHas) {
-      _bmHas = false;
-      return _bmSpare;
+    function clamp(n, min, max) {
+      return Math.min(max, Math.max(min, n));
     }
-    let u = 0, v = 0;
-    while (u === 0) u = Math.random();
-    while (v === 0) v = Math.random();
-    const r = Math.sqrt(-2.0 * Math.log(u));
-    const theta = 2.0 * Math.PI * v;
-    _bmSpare = r * Math.sin(theta);
-    _bmHas = true;
-    return r * Math.cos(theta);
-  }
 
-  // ==== Серии данных ====
-  const DATASETS = {
-    sine: {
+    // gaussian helper for generators
+    let _bmHas = false, _bmSpare = 0;
+
+    function randn() {
+      if (_bmHas) {
+        _bmHas = false;
+        return _bmSpare;
+      }
+      let u = 0, v = 0;
+      while (u === 0) u = Math.random();
+      while (v === 0) v = Math.random();
+      const r = Math.sqrt(-2.0 * Math.log(u));
+      const theta = 2.0 * Math.PI * v;
+      _bmSpare = r * Math.sin(theta);
+      _bmHas = true;
+      return r * Math.cos(theta);
+    }
+
+    // ---- datasets ----
+    const DATASETS = {};
+    DATASETS.sine = {
       label: 'sin',
-      params: [
-        { key: 'amp', label: 'A', type: 'range', min: 0, max: 5, step: 0.1, value: 1 },
-        { key: 'freq', label: 'freq(циклов)', type: 'range', min: 0.1, max: 200, step: 0.1, value: 10 },
-        { key: 'phase', label: 'φ(rad)', type: 'range', min: 0, max: 6.283, step: 0.01, value: 0 },
-        { key: 'noise', label: 'σ шум', type: 'range', min: 0, max: 1, step: 0.01, value: 0.05 }
-      ],
+      params: [{ key: 'amp', label: 'A', type: 'range', min: 0, max: 5, step: 0.1, value: 1 }, {
+        key: 'freq',
+        label: 'freq(циклов)',
+        type: 'range',
+        min: 0.1,
+        max: 200,
+        step: 0.1,
+        value: 10
+      }, { key: 'phase', label: 'φ(rad)', type: 'range', min: 0, max: 6.283, step: 0.01, value: 0 }, {
+        key: 'noise',
+        label: 'σ шум',
+        type: 'range',
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: 0.05
+      }],
       gen(n, p) {
         const Y = new Float32Array(n);
         const w = 2 * Math.PI * p.freq / n;
         for (let i = 0; i < n; i++) Y[i] = p.amp * Math.sin(w * i + p.phase) + p.noise * randn();
         return Y;
       }
-    },
-    cosine: {
+    };
+    DATASETS.cosine = {
       label: 'cos',
-      params: [
-        { key: 'amp', label: 'A', type: 'range', min: 0, max: 5, step: 0.1, value: 1 },
-        { key: 'freq', label: 'freq', type: 'range', min: 0.1, max: 200, step: 0.1, value: 10 },
-        { key: 'phase', label: 'φ(rad)', type: 'range', min: 0, max: 6.283, step: 0.01, value: 0 },
-        { key: 'noise', label: 'σ шум', type: 'range', min: 0, max: 1, step: 0.01, value: 0.05 }
-      ],
+      params: [{ key: 'amp', label: 'A', type: 'range', min: 0, max: 5, step: 0.1, value: 1 }, {
+        key: 'freq',
+        label: 'freq',
+        type: 'range',
+        min: 0.1,
+        max: 200,
+        step: 0.1,
+        value: 10
+      }, { key: 'phase', label: 'φ(rad)', type: 'range', min: 0, max: 6.283, step: 0.01, value: 0 }, {
+        key: 'noise',
+        label: 'σ шум',
+        type: 'range',
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: 0.05
+      }],
       gen(n, p) {
         const Y = new Float32Array(n);
         const w = 2 * Math.PI * p.freq / n;
         for (let i = 0; i < n; i++) Y[i] = p.amp * Math.cos(w * i + p.phase) + p.noise * randn();
         return Y;
       }
-    },
-    chirp: {
+    };
+    DATASETS.chirp = {
       label: 'chirp',
-      params: [
-        { key: 'amp', label: 'A', type: 'range', min: 0, max: 5, step: 0.1, value: 1 },
-        { key: 'f0', label: 'f0', type: 'range', min: 0.01, max: 50, step: 0.01, value: 1 },
-        { key: 'f1', label: 'f1', type: 'range', min: 0.01, max: 200, step: 0.01, value: 40 },
-        { key: 'noise', label: 'σ шум', type: 'range', min: 0, max: 1, step: 0.01, value: 0.03 }
-      ],
+      params: [{ key: 'amp', label: 'A', type: 'range', min: 0, max: 5, step: 0.1, value: 1 }, {
+        key: 'f0',
+        label: 'f0',
+        type: 'range',
+        min: 0.01,
+        max: 50,
+        step: 0.01,
+        value: 1
+      }, { key: 'f1', label: 'f1', type: 'range', min: 0.01, max: 200, step: 0.01, value: 40 }, {
+        key: 'noise',
+        label: 'σ шум',
+        type: 'range',
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: 0.03
+      }],
       gen(n, p) {
         const Y = new Float32Array(n);
         let theta = 0;
@@ -526,15 +655,26 @@
         }
         return Y;
       }
-    },
-    seasonTrend: {
+    };
+    DATASETS.seasonTrend = {
       label: 'тренд+сезонность',
-      params: [
-        { key: 'slope', label: 'slope', type: 'range', min: -2, max: 2, step: 0.01, value: 0.3 },
-        { key: 'amp', label: 'A', type: 'range', min: 0, max: 5, step: 0.1, value: 1.2 },
-        { key: 'freq', label: 'freq', type: 'range', min: 0.5, max: 50, step: 0.5, value: 8 },
-        { key: 'noise', label: 'σ шум', type: 'range', min: 0, max: 1, step: 0.01, value: 0.05 }
-      ],
+      params: [{ key: 'slope', label: 'slope', type: 'range', min: -2, max: 2, step: 0.01, value: 0.3 }, {
+        key: 'amp',
+        label: 'A',
+        type: 'range',
+        min: 0,
+        max: 5,
+        step: 0.1,
+        value: 1.2
+      }, { key: 'freq', label: 'freq', type: 'range', min: 0.5, max: 50, step: 0.5, value: 8 }, {
+        key: 'noise',
+        label: 'σ шум',
+        type: 'range',
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: 0.05
+      }],
       gen(n, p) {
         const Y = new Float32Array(n);
         const w = 2 * Math.PI * p.freq / n;
@@ -544,25 +684,35 @@
         }
         return Y;
       }
-    },
-    gaussianNoise: {
+    };
+    DATASETS.gaussianNoise = {
       label: 'нормальный шум',
-      params: [
-        { key: 'mu', label: 'μ', type: 'range', min: -2, max: 2, step: 0.01, value: 0 },
-        { key: 'sigma', label: 'σ', type: 'range', min: 0.001, max: 1.5, step: 0.001, value: 0.1 }
-      ],
+      params: [{ key: 'mu', label: 'μ', type: 'range', min: -2, max: 2, step: 0.01, value: 0 }, {
+        key: 'sigma',
+        label: 'σ',
+        type: 'range',
+        min: 0.001,
+        max: 1.5,
+        step: 0.001,
+        value: 0.1
+      }],
       gen(n, p) {
         const Y = new Float32Array(n);
         for (let i = 0; i < n; i++) Y[i] = p.mu + p.sigma * randn();
         return Y;
       }
-    },
-    randomWalk: {
+    };
+    DATASETS.randomWalk = {
       label: 'random walk',
-      params: [
-        { key: 'drift', label: 'дрейф', type: 'range', min: -0.2, max: 0.2, step: 0.001, value: 0.0 },
-        { key: 'sigma', label: 'σ шага', type: 'range', min: 0.001, max: 1, step: 0.001, value: 0.05 }
-      ],
+      params: [{
+        key: 'drift',
+        label: 'дрейф',
+        type: 'range',
+        min: -0.2,
+        max: 0.2,
+        step: 0.001,
+        value: 0.0
+      }, { key: 'sigma', label: 'σ шага', type: 'range', min: 0.001, max: 1, step: 0.001, value: 0.05 }],
       gen(n, p) {
         const Y = new Float32Array(n);
         let yv = 0;
@@ -572,14 +722,18 @@
         }
         return Y;
       }
-    },
-    ar1: {
+    };
+    DATASETS.ar1 = {
       label: 'AR(1)',
-      params: [
-        { key: 'phi', label: 'φ', type: 'range', min: -0.99, max: 0.99, step: 0.01, value: 0.9 },
-        { key: 'sigma', label: 'σ шум', type: 'range', min: 0.001, max: 1, step: 0.001, value: 0.05 },
-        { key: 'drift', label: 'дрейф', type: 'range', min: -0.2, max: 0.2, step: 0.001, value: 0.0 }
-      ],
+      params: [{ key: 'phi', label: 'φ', type: 'range', min: -0.99, max: 0.99, step: 0.01, value: 0.9 }, {
+        key: 'sigma',
+        label: 'σ шум',
+        type: 'range',
+        min: 0.001,
+        max: 1,
+        step: 0.001,
+        value: 0.05
+      }, { key: 'drift', label: 'дрейф', type: 'range', min: -0.2, max: 0.2, step: 0.001, value: 0.0 }],
       gen(n, p) {
         const Y = new Float32Array(n);
         let yv = 0;
@@ -589,14 +743,26 @@
         }
         return Y;
       }
-    },
-    spikes: {
+    };
+    DATASETS.spikes = {
       label: 'спайки',
-      params: [
-        { key: 'rate', label: 'p(спайк)', type: 'range', min: 0, max: 0.1, step: 0.001, value: 0.01 },
-        { key: 'amp', label: 'A спайка', type: 'range', min: 0, max: 10, step: 0.1, value: 3 },
-        { key: 'baseNoise', label: 'σ шум', type: 'range', min: 0, max: 1, step: 0.01, value: 0.05 }
-      ],
+      params: [{
+        key: 'rate',
+        label: 'p(спайк)',
+        type: 'range',
+        min: 0,
+        max: 0.1,
+        step: 0.001,
+        value: 0.01
+      }, { key: 'amp', label: 'A спайка', type: 'range', min: 0, max: 10, step: 0.1, value: 3 }, {
+        key: 'baseNoise',
+        label: 'σ шум',
+        type: 'range',
+        min: 0,
+        max: 1,
+        step: 0.01,
+        value: 0.05
+      }],
       gen(n, p) {
         const Y = new Float32Array(n);
         for (let i = 0; i < n; i++) {
@@ -606,14 +772,26 @@
         }
         return Y;
       }
-    },
-    stepJumps: {
+    };
+    DATASETS.stepJumps = {
       label: 'ступеньки',
-      params: [
-        { key: 'avgPeriod', label: 'период', type: 'range', min: 10, max: 50000, step: 10, value: 2000 },
-        { key: 'jump', label: 'Δ шаг', type: 'range', min: 0, max: 5, step: 0.05, value: 1 },
-        { key: 'baseNoise', label: 'σ шум', type: 'range', min: 0, max: 0.5, step: 0.01, value: 0.03 }
-      ],
+      params: [{
+        key: 'avgPeriod',
+        label: 'период',
+        type: 'range',
+        min: 10,
+        max: 50000,
+        step: 10,
+        value: 2000
+      }, { key: 'jump', label: 'Δ шаг', type: 'range', min: 0, max: 5, step: 0.05, value: 1 }, {
+        key: 'baseNoise',
+        label: 'σ шум',
+        type: 'range',
+        min: 0,
+        max: 0.5,
+        step: 0.01,
+        value: 0.03
+      }],
       gen(n, p) {
         const Y = new Float32Array(n);
         let level = 0, toNext = Math.max(1, Math.round(p.avgPeriod * (0.5 + Math.random())));
@@ -626,15 +804,26 @@
         }
         return Y;
       }
-    },
-    gaussianBell: {
+    };
+    DATASETS.gaussianBell = {
       label: 'гауссов колокол',
-      params: [
-        { key: 'amp', label: 'A', type: 'range', min: 0, max: 5, step: 0.05, value: 1.5 },
-        { key: 'center', label: 'центр(0..1)', type: 'range', min: 0, max: 1, step: 0.001, value: 0.5 },
-        { key: 'width', label: 'ширина(σ/N)', type: 'range', min: 0.001, max: 0.5, step: 0.001, value: 0.08 },
-        { key: 'noise', label: 'σ шум', type: 'range', min: 0, max: 0.5, step: 0.005, value: 0.01 }
-      ],
+      params: [{ key: 'amp', label: 'A', type: 'range', min: 0, max: 5, step: 0.05, value: 1.5 }, {
+        key: 'center',
+        label: 'центр(0..1)',
+        type: 'range',
+        min: 0,
+        max: 1,
+        step: 0.001,
+        value: 0.5
+      }, {
+        key: 'width',
+        label: 'ширина(σ/N)',
+        type: 'range',
+        min: 0.001,
+        max: 0.5,
+        step: 0.001,
+        value: 0.08
+      }, { key: 'noise', label: 'σ шум', type: 'range', min: 0, max: 0.5, step: 0.005, value: 0.01 }],
       gen(n, p) {
         const Y = new Float32Array(n);
         const mu = p.center * (n - 1);
@@ -645,466 +834,1127 @@
         }
         return Y;
       }
-    }
-  };
+    };
 
-  // ==== Демо-данные ====
-  let Y = new Float32Array(0);
-  let N = 0;
+    let Y = new Float32Array(0);
+    let N = 0;
 
-  // ==== UI ссылки ====
-  const nInput = document.getElementById('nInput');
-  const regenBtn = document.getElementById('regen');
-  const countEl = d3.select('#count');
-  const visibleEl = d3.select('#visible');
-  const zoomEl = d3.select('#legendZoom');
-  const dsEl = d3.select('#legendDS');
-  const interpEl = d3.select('#legendInterp');
-  const seriesEl = d3.select('#legendSeries');
-  const lineEl = d3.select('#legendLine');
-  const swatchEl = d3.select('#legendSwatch');
+    let tableInitialized = false;
+    let tableSeries = [];
+    let tableAllX = []; // sorted unique X across all table series
+    let tableMinDx = 1;  // динамически пересчитывается
+    const palette = (d3.schemeTableau10 && Array.from(d3.schemeTableau10)) || ['#4e79a7', '#f28e2c', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac'];
 
-  const seriesSelect = document.getElementById('seriesSelect');
-  const seriesParamsEl = document.getElementById('seriesParams');
+    // ==== HOVER-FIX STATE (polyline cache)
+    let renderPoints = [];
+    let renderPolyline = null; // current series polyline (in PIXELS)
 
-  // Построение UI параметров для выбранной серии
-  function buildParamsUI() {
-    const def = DATASETS[seriesSelect.value];
-    seriesParamsEl.innerHTML = '';
-    def.params.forEach(p => {
-      const id = `p_${p.key}`;
-      const wrap = document.createElement('label');
-      wrap.htmlFor = id;
-      const input = document.createElement('input');
-      input.id = id;
-      input.type = p.type || 'range';
-      input.min = String(p.min);
-      input.max = String(p.max);
-      input.step = String(p.step);
-      input.value = String(p.value);
-      const b = document.createElement('b');
-      b.textContent = String(p.value);
-      input.addEventListener('input', () => {
-        b.textContent = input.value;
+    // Grabbing DOM after DOMContentLoaded — now safe
+    const nInput = document.getElementById('nInput');
+    const nWrap = document.getElementById('nWrap');
+    const regenBtn = document.getElementById('regen');
+    const countEl = d3.select('#count');
+    const visibleEl = d3.select('#visible');
+    const zoomEl = d3.select('#legendZoom');
+    const dsEl = d3.select('#legendDS');
+    const interpEl = d3.select('#legendInterp');
+    const seriesEl = d3.select('#legendSeries');
+    const lineEl = d3.select('#legendLine');
+    const swatchEl = d3.select('#legendSwatch');
+
+    const seriesSelect = document.getElementById('seriesSelect');
+    const seriesParamsEl = document.getElementById('seriesParams');
+    const tableBar = document.getElementById('tableBar');
+    const tableWrap = document.getElementById('tableWrap');
+    const theadRow = document.getElementById('theadRow');
+    const tbody = document.getElementById('tbody');
+    const seriesLegend = document.getElementById('seriesLegend');
+    const lineColorWrap = document.getElementById('lineColorWrap');
+    const alwaysSnapEl = document.getElementById('alwaysSnap');
+    const runTestsBtn = document.getElementById('runTests');
+
+    function buildParamsUI() {
+      if (seriesSelect.value === 'table') {
+        seriesParamsEl.innerHTML = '';
+        return;
+      }
+      const def = DATASETS[seriesSelect.value];
+      seriesParamsEl.innerHTML = '';
+      def.params.forEach(p => {
+        const id = `p_${p.key}`;
+        const wrap = document.createElement('label');
+        wrap.htmlFor = id;
+        const input = document.createElement('input');
+        input.id = id;
+        input.type = p.type || 'range';
+        input.min = String(p.min);
+        input.max = String(p.max);
+        input.step = String(p.step);
+        input.value = String(p.value);
+        const b = document.createElement('b');
+        b.textContent = String(p.value);
+        input.addEventListener('input', () => {
+          b.textContent = input.value;
+        });
+        input.addEventListener('change', () => setData(nInput.value));
+        wrap.append(p.label + ': ', input, ' ', b);
+        seriesParamsEl.appendChild(wrap);
       });
-      input.addEventListener('change', () => setData(nInput.value)); // не душим CPU на input
-      wrap.append(p.label + ': ', input, ' ', b);
-      seriesParamsEl.appendChild(wrap);
-    });
-  }
-
-  function readParams() {
-    const def = DATASETS[seriesSelect.value];
-    const params = {};
-    def.params.forEach(p => {
-      const el = document.getElementById(`p_${p.key}`);
-      params[p.key] = parseFloat(el.value);
-    });
-    return params;
-  }
-
-  // ==== Видимый диапазон индексов ====
-  function visibleIndexRange() {
-    if (N === 0) return [0, -1];
-    const [xStart, xEnd] = x.domain();
-    const i0 = clamp(Math.floor(xStart), 0, N - 1);
-    const i1 = clamp(Math.ceil(xEnd), 0, N - 1);
-    if (i1 < i0) return [i0, i0];
-    return [i0, i1];
-  }
-
-  // ==== Децимация: min/max на колонку пикселя ====
-  function decimateMinMaxPerPixelY(Y, xScale, binPx = 1, i0 = 0, i1 = Y.length - 1) {
-    const leftPx = MARGIN.left, rightPx = width - MARGIN.right;
-    const innerWidth = rightPx - leftPx;
-    if (innerWidth <= 0) return [];
-    const [xStart, xEnd] = xScale.domain();
-    const domainSpan = xEnd - xStart || 1;
-    const binsCount = Math.max(1, Math.floor(innerWidth / Math.max(1, binPx)));
-    const binsMin = new Array(binsCount), binsMax = new Array(binsCount);
-
-    for (let i = i0; i <= i1; i++) {
-      const vx = i;
-      if (vx < xStart || vx > xEnd) continue;
-      const pos = (vx - xStart) / domainSpan * (innerWidth - 1);
-      const b = Math.min(binsCount - 1, Math.max(0, Math.floor(pos / Math.max(1, binPx))));
-      const vy = Y[i];
-      const bmin = binsMin[b];
-      if (!bmin || vy < bmin.vy) binsMin[b] = { i, vy };
-      const bmax = binsMax[b];
-      if (!bmax || vy > bmax.vy) binsMax[b] = { i, vy };
     }
 
-    const idx = [];
-    for (let b = 0; b < binsCount; b++) {
-      const mn = binsMin[b], mx = binsMax[b];
-      if (!mn && !mx) continue;
-      if (!mn || !mx || mn.i === mx.i) {
-        const ii = (mn || mx).i;
-        if (idx.length === 0 || idx[idx.length - 1] !== ii) idx.push(ii);
-      } else {
-        if (mn.i < mx.i) {
-          if (idx.length === 0 || idx[idx.length - 1] !== mn.i) idx.push(mn.i);
-          if (idx[idx.length - 1] !== mx.i) idx.push(mx.i);
+    function readParams() {
+      const def = DATASETS[seriesSelect.value];
+      const params = {};
+      if (!def) return params;
+      def.params.forEach(p => {
+        const el = document.getElementById(`p_${p.key}`);
+        params[p.key] = parseFloat(el.value);
+      });
+      return params;
+    }
+
+    function visibleIndexRange() {
+      if (N === 0) return [0, -1];
+      const [xStart, xEnd] = x.domain();
+      const i0 = clamp(Math.floor(xStart), 0, N - 1);
+      const i1 = clamp(Math.ceil(xEnd), 0, N - 1);
+      if (i1 < i0) return [i0, i0];
+      return [i0, i1];
+    }
+
+    function decimateMinMaxPerPixelY(Y, xScale, binPx = 1, i0 = 0, i1 = Y.length - 1) {
+      const leftPx = MARGIN.left, rightPx = width - MARGIN.right;
+      const innerWidth = rightPx - leftPx;
+      if (innerWidth <= 0) return [];
+      const [xStart, xEnd] = xScale.domain();
+      const domainSpan = xEnd - xStart || 1;
+      const binsCount = Math.max(1, Math.floor(innerWidth / Math.max(1, binPx)));
+      const binsMin = new Array(binsCount), binsMax = new Array(binsCount);
+      for (let i = i0; i <= i1; i++) {
+        const vx = i;
+        if (vx < xStart || vx > xEnd) continue;
+        const pos = (vx - xStart) / domainSpan * (innerWidth - 1);
+        const b = Math.min(binsCount - 1, Math.max(0, Math.floor(pos / Math.max(1, binPx))));
+        const vy = Y[i];
+        const bmin = binsMin[b];
+        if (!bmin || vy < bmin.vy) binsMin[b] = { i, vy };
+        const bmax = binsMax[b];
+        if (!bmax || vy > bmax.vy) binsMax[b] = { i, vy };
+      }
+      const idx = [];
+      for (let b = 0; b < binsCount; b++) {
+        const mn = binsMin[b], mx = binsMax[b];
+        if (!mn && !mx) continue;
+        if (!mn || !mx || mn.i === mx.i) {
+          const ii = (mn || mx).i;
+          if (idx.length === 0 || idx[idx.length - 1] !== ii) idx.push(ii);
         } else {
-          if (idx.length === 0 || idx[idx.length - 1] !== mx.i) idx.push(mx.i);
-          if (idx[idx.length - 1] !== mn.i) idx.push(mn.i);
+          if (mn.i < mx.i) {
+            if (idx.length === 0 || idx[idx.length - 1] !== mn.i) idx.push(mn.i);
+            if (idx[idx.length - 1] !== mx.i) idx.push(mx.i);
+          } else {
+            if (idx.length === 0 || idx[idx.length - 1] !== mx.i) idx.push(mx.i);
+            if (idx[idx.length - 1] !== mn.i) idx.push(mn.i);
+          }
         }
       }
+      if (i0 <= i1) {
+        if (idx.length === 0 || idx[0] !== i0) idx.unshift(i0);
+        if (idx[idx.length - 1] !== i1) idx.push(i1);
+      }
+      // guarantee at least two points at extreme zoom (i0==i1)
+      if (i0 === i1) {
+        if (i1 + 1 < Y.length && idx[idx.length - 1] !== i1 + 1) idx.push(i1 + 1);
+        else if (i0 - 1 >= 0 && idx[0] !== i0 - 1) idx.unshift(i0 - 1);
+      }
+
+      const points = new Array(idx.length);
+      for (let k = 0; k < idx.length; k++) {
+        const ii = idx[k];
+        points[k] = { x: ii, y: Y[ii] };
+      }
+      return points;
     }
-    if (i0 <= i1) {
-      if (idx.length === 0 || idx[0] !== i0) idx.unshift(i0);
-      if (idx[idx.length - 1] !== i1) idx.push(i1);
+
+    const lineGen = d3.line().defined(d => Number.isFinite(d.y)).x(d => x(d.x)).y(d => y(d.y)).context(ctx);
+
+    function clearCanvas() {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (BG_COLOR) {
+        ctx.fillStyle = BG_COLOR;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      ctx.restore();
     }
 
-    const points = new Array(idx.length);
-    for (let k = 0; k < idx.length; k++) {
-      const ii = idx[k];
-      points[k] = { x: ii, y: Y[ii] };
+    function drawLine(points, stroke) {
+      if (!points.length) return;
+      if (points.length === 1) {
+        // fallback: рисуем точку, чтобы «исчезновение» не происходило
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(MARGIN.left, MARGIN.top, width - MARGIN.left - MARGIN.right, height - MARGIN.top - MARGIN.bottom);
+        ctx.clip();
+        ctx.beginPath();
+        ctx.arc(x(points[0].x), y(points[0].y), Math.max(1.5, lineWidth + 0.5), 0, Math.PI * 2);
+        ctx.fillStyle = stroke || lineColor;
+        ctx.fill();
+        ctx.restore();
+        return;
+      }
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(MARGIN.left, MARGIN.top, width - MARGIN.left - MARGIN.right, height - MARGIN.top - MARGIN.bottom);
+      ctx.clip();
+      ctx.beginPath();
+      lineGen(points);
+      ctx.lineWidth = lineWidth;
+      ctx.strokeStyle = stroke || lineColor;
+      ctx.stroke();
+      ctx.restore();
     }
-    return points;
-  }
 
-  // ==== Линия через d3-shape с Canvas контекстом ====
-  const lineGen = d3.line()
-    .defined(d => Number.isFinite(d.y))
-    .x(d => x(d.x))
-    .y(d => y(d.y))
-    .context(ctx);
+    let raf = 0;
 
-  function clearCanvas() {
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (BG_COLOR) {
-      ctx.fillStyle = BG_COLOR;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    function scheduleRender() {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(render);
     }
-    ctx.restore();
-  }
 
-  function drawLine(points) {
-    if (!points.length) return;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(MARGIN.left, MARGIN.top, width - MARGIN.left - MARGIN.right, height - MARGIN.top - MARGIN.bottom);
-    ctx.clip();
-    ctx.beginPath();
-    lineGen(points);
-    ctx.lineWidth = lineWidth;
-    ctx.strokeStyle = lineColor;
-    ctx.stroke();
-    ctx.restore();
-  }
+    const useDS = document.getElementById('useDS');
+    useDS.checked = DEFAULT_USE_DS;
+    const dsRate = document.getElementById('dsRate');
+    const dsRateLabel = document.getElementById('dsRateLabel');
 
-  function computeVisibleYDomainFromPoints(points) {
-    if (!points.length) return y.domain();
-    let ymin = +Infinity, ymax = -Infinity;
-    for (let i = 0; i < points.length; i++) {
-      const v = points[i].y;
-      if (v < ymin) ymin = v;
-      if (v > ymax) ymax = v;
+    function updateRateLabel() {
+      dsRateLabel.textContent = `${dsRate.value}px/бин`;
     }
-    if (ymin === ymax) {
-      const eps = Math.abs(ymin || 1) * 1e-6;
-      ymin -= eps;
-      ymax += eps;
-    }
-    return [ymin, ymax];
-  }
 
-  // RAF-батчинг
-  let raf = 0;
-
-  function scheduleRender() {
-    cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(render);
-  }
-
-  // ==== UI: интерполяция/опции ====
-  const autoY = document.getElementById('autoY');
-  autoY.checked = AUTO_RESCALE_Y;
-  autoY.addEventListener('change', scheduleRender);
-  const useDS = document.getElementById('useDS');
-  useDS.checked = DEFAULT_USE_DS;
-  const dsRate = document.getElementById('dsRate');
-  const dsRateLabel = document.getElementById('dsRateLabel');
-
-  function updateRateLabel() {
-    dsRateLabel.textContent = `${dsRate.value}px/бин`;
-  }
-
-  updateRateLabel();
-  useDS.addEventListener('change', () => {
-    dsRate.disabled = !useDS.checked;
-    scheduleRender();
-    updateLegendText();
-  });
-  dsRate.addEventListener('input', () => {
     updateRateLabel();
-    scheduleRender();
-    updateLegendText();
-  });
-  dsRate.disabled = !useDS.checked;
+    useDS.addEventListener('change', () => {
+      dsRate.disabled = !useDS.checked;
+      scheduleRender();
+      updateLegendText();
+    });
+    dsRate.addEventListener('input', () => {
+      updateRateLabel();
+      scheduleRender();
+      updateLegendText();
+    });
+    dsRate.disabled = !useDS.checked;
 
-  const useInterp = document.getElementById('useInterp');
-  useInterp.checked = DEFAULT_USE_INTERP;
-  useInterp.addEventListener('change', updateLegendText);
-  const curveSelect = document.getElementById('curveSelect');
-  curveSelect.value = DEFAULT_CURVE;
-  curveSelect.addEventListener('change', updateLegendText);
+    const useInterp = document.getElementById('useInterp');
+    useInterp.checked = DEFAULT_USE_INTERP;
+    useInterp.addEventListener('change', () => {
+      updateLegendText();
+      scheduleRender();
+    });
+    const curveSelect = document.getElementById('curveSelect');
+    curveSelect.value = DEFAULT_CURVE;
+    curveSelect.addEventListener('change', () => {
+      updateLegendText();
+      scheduleRender();
+    });
+    const alphaWrap = document.getElementById('alphaWrap');
+    const tensionWrap = document.getElementById('tensionWrap');
+    const betaWrap = document.getElementById('betaWrap');
+    const alphaSlider = document.getElementById('alphaSlider');
+    const alphaLabel = document.getElementById('alphaLabel');
+    const tensionSlider = document.getElementById('tensionSlider');
+    const tensionLabel = document.getElementById('tensionLabel');
+    const betaSlider = document.getElementById('betaSlider');
+    const betaLabel = document.getElementById('betaLabel');
 
-  const alphaWrap = document.getElementById('alphaWrap');
-  const tensionWrap = document.getElementById('tensionWrap');
-  const betaWrap = document.getElementById('betaWrap');
-  const alphaSlider = document.getElementById('alphaSlider');
-  const alphaLabel = document.getElementById('alphaLabel');
-  const tensionSlider = document.getElementById('tensionSlider');
-  const tensionLabel = document.getElementById('tensionLabel');
-  const betaSlider = document.getElementById('betaSlider');
-  const betaLabel = document.getElementById('betaLabel');
-
-  function fmt2(v) {
-    return (+v).toFixed(2);
-  }
-
-  function updateInterpControlsState() {
-    const enabled = useInterp.checked;
-    curveSelect.disabled = !enabled;
-    const sel = curveSelect.value;
-    alphaWrap.classList.toggle('hidden', !(enabled && sel === 'catmullRom'));
-    tensionWrap.classList.toggle('hidden', !(enabled && sel === 'cardinal'));
-    betaWrap.classList.toggle('hidden', !(enabled && sel === 'bundle'));
-  }
-
-  function updateParamLabels() {
-    alphaLabel.textContent = fmt2(alphaSlider.value);
-    tensionLabel.textContent = fmt2(tensionSlider.value);
-    betaLabel.textContent = fmt2(betaSlider.value);
-  }
-
-  function getSelectedCurve() {
-    const sel = curveSelect.value;
-    switch (sel) {
-      case 'catmullRom':
-        return d3.curveCatmullRom.alpha(parseFloat(alphaSlider.value) || 0.5);
-      case 'cardinal':
-        return d3.curveCardinal.tension(parseFloat(tensionSlider.value) || 0);
-      case 'bundle':
-        return d3.curveBundle.beta(parseFloat(betaSlider.value) || 0.85);
-      case 'monotoneX':
-        return d3.curveMonotoneX;
-      case 'natural':
-        return d3.curveNatural;
-      case 'basis':
-        return d3.curveBasis;
-      case 'bumpX':
-        return d3.curveBumpX;
-      case 'step':
-        return d3.curveStep;
-      case 'stepBefore':
-        return d3.curveStepBefore;
-      case 'stepAfter':
-        return d3.curveStepAfter;
-      case 'linear':
-      default:
-        return d3.curveLinear;
+    function fmt2(v) {
+      return (+v).toFixed(2);
     }
-  }
 
-  function applyCurve() {
-    lineGen.curve(useInterp.checked ? getSelectedCurve() : d3.curveLinear);
-  }
-
-  updateParamLabels();
-  updateInterpControlsState();
-  applyCurve();
-  useInterp.addEventListener('change', () => {
-    updateInterpControlsState();
-    applyCurve();
-    scheduleRender();
-  });
-  curveSelect.addEventListener('change', () => {
-    updateInterpControlsState();
-    applyCurve();
-    scheduleRender();
-  });
-  alphaSlider.addEventListener('input', () => {
-    updateParamLabels();
-    applyCurve();
-    scheduleRender();
-  });
-  tensionSlider.addEventListener('input', () => {
-    updateParamLabels();
-    applyCurve();
-    scheduleRender();
-  });
-  betaSlider.addEventListener('input', () => {
-    updateParamLabels();
-    applyCurve();
-    scheduleRender();
-  });
-
-  // Отображение: толщина + цвет
-  const lw = document.getElementById('lineWidth');
-  const lwLabel = document.getElementById('lineWidthLabel');
-  const lc = document.getElementById('lineColor');
-  lw.addEventListener('input', () => {
-    lineWidth = parseFloat(lw.value) || 1;
-    lwLabel.textContent = lineWidth.toFixed(1);
-    updateLegendText();
-    scheduleRender();
-  });
-  lc.addEventListener('input', () => {
-    lineColor = lc.value || '#2474ff';
-    updateLegendText();
-    scheduleRender();
-  });
-
-  // ==== Рендер ====
-  function updateLegendText() {
-    const dsText = useDS.checked ? `on (${dsRate.value}px/бин)` : 'off';
-    dsEl.text(dsText);
-
-    let interpText = 'linear';
-    if (useInterp.checked) {
+    function updateInterpControlsState() {
+      const enabled = useInterp.checked;
+      curveSelect.disabled = !enabled;
       const sel = curveSelect.value;
-      if (sel === 'catmullRom') interpText = `Catmull–Rom α=${fmt2(alphaSlider.value)}`;
-      else if (sel === 'cardinal') interpText = `Cardinal τ=${fmt2(tensionSlider.value)}`;
-      else if (sel === 'bundle') interpText = `Bundle β=${fmt2(betaSlider.value)}`;
-      else interpText = sel;
-    } else interpText = 'off';
-    interpEl.text(interpText);
+      alphaWrap.classList.toggle('hidden', !(enabled && sel === 'catmullRom'));
+      tensionWrap.classList.toggle('hidden', !(enabled && sel === 'cardinal'));
+      betaWrap.classList.toggle('hidden', !(enabled && sel === 'bundle'));
+    }
 
-    const def = DATASETS[seriesSelect.value];
-    seriesEl.text(def.label);
+    function updateParamLabels() {
+      alphaLabel.textContent = fmt2(alphaSlider.value);
+      tensionLabel.textContent = fmt2(tensionSlider.value);
+      betaLabel.textContent = fmt2(betaSlider.value);
+    }
 
-    swatchEl.style('background', lineColor);
-    lineEl.text(`${lineColor} · ${lineWidth.toFixed(1)}px`);
-  }
-
-  function render() {
-    clearCanvas();
-    let points = [];
-    const [i0, i1] = visibleIndexRange();
-
-    if (useDS.checked) {
-      points = decimateMinMaxPerPixelY(Y, x, Math.max(1, parseInt(dsRate.value, 10) || 1), i0, i1);
-    } else {
-      const len = Math.max(0, i1 - i0 + 1);
-      points = new Array(len);
-      for (let i = 0; i < len; i++) {
-        const ii = i0 + i;
-        points[i] = { x: ii, y: Y[ii] };
+    function getSelectedCurve() {
+      const sel = curveSelect.value;
+      switch (sel) {
+        case 'catmullRom':
+          return d3.curveCatmullRom.alpha(parseFloat(alphaSlider.value) || 0.5);
+        case 'cardinal':
+          return d3.curveCardinal.tension(parseFloat(tensionSlider.value) || 0);
+        case 'bundle':
+          return d3.curveBundle.beta(parseFloat(betaSlider.value) || 0.85);
+        case 'monotoneX':
+          return d3.curveMonotoneX;
+        case 'natural':
+          return d3.curveNatural;
+        case 'basis':
+          return d3.curveBasis;
+        case 'bumpX':
+          return d3.curveBumpX;
+        case 'step':
+          return d3.curveStep;
+        case 'stepBefore':
+          return d3.curveStepBefore;
+        case 'stepAfter':
+          return d3.curveStepAfter;
+        case 'linear':
+        default:
+          return d3.curveLinear;
       }
     }
 
-    if (autoY.checked) y.domain(computeVisibleYDomainFromPoints(points)).nice();
-    else y.domain(y0.domain());
+    function applyCurve() {
+      lineGen.curve(useInterp.checked ? getSelectedCurve() : d3.curveLinear);
+    }
 
-    drawAxes();
-    visibleEl.text(points.length.toLocaleString('en-US'));
-
-    // Zoom label
-    const z = (x0.domain()[1] - x0.domain()[0]) / Math.max(1e-9, (x.domain()[1] - x.domain()[0]));
-    zoomEl.text(`${z.toFixed(2)}×`);
-
-    drawLine(points);
-  }
-
-  // ==== Зум/пан ====
-  const zoom = d3.zoom()
-    .scaleExtent([1, 10_000])
-    .translateExtent([[MARGIN.left, MARGIN.top], [width - MARGIN.right, height - MARGIN.bottom]])
-    .on('zoom', (ev) => {
-      const t = ev.transform;
-      const zx = t.rescaleX(x0);
-      x.domain(zx.domain());
+    updateParamLabels();
+    updateInterpControlsState();
+    applyCurve();
+    useInterp.addEventListener('change', () => {
+      updateInterpControlsState();
+      applyCurve();
+      scheduleRender();
+    });
+    curveSelect.addEventListener('change', () => {
+      updateInterpControlsState();
+      applyCurve();
+      scheduleRender();
+    });
+    alphaSlider.addEventListener('input', () => {
+      updateParamLabels();
+      applyCurve();
+      scheduleRender();
+    });
+    tensionSlider.addEventListener('input', () => {
+      updateParamLabels();
+      applyCurve();
+      scheduleRender();
+    });
+    betaSlider.addEventListener('input', () => {
+      updateParamLabels();
+      applyCurve();
       scheduleRender();
     });
 
-  const overlay = svg.append('rect')
-    .attr('x', MARGIN.left).attr('y', MARGIN.top)
-    .attr('width', width - MARGIN.left - MARGIN.right)
-    .attr('height', height - MARGIN.top - MARGIN.bottom)
-    .style('fill', 'transparent').style('cursor', 'grab')
-    .call(zoom);
-
-  // ==== Данные/инициализация ====
-  function setData(n) {
-    N = clamp(parseInt(n, 10) || 0, +nInput.min, MAX_POINTS);
-    nInput.value = String(N);
-    const def = DATASETS[seriesSelect.value];
-    const params = readParams();
-    Y = def.gen(N, params);
-
-    countEl.text(N.toLocaleString('en-US'));
-    x.domain([0, Math.max(1, N - 1)]);
-    x0.domain(x.domain());
-    y.domain(extentFloat32(Y)).nice();
-    y0.domain(y.domain());
-
-    overlay.call(zoom.transform, d3.zoomIdentity);
-    drawAxes();
-    scheduleRender();
-    updateLegendText();
-  }
-
-  seriesSelect.addEventListener('change', () => {
-    buildParamsUI();
-    setData(nInput.value);
-  });
-
-  const nEl = document.getElementById('nInput');
-  regenBtn.addEventListener('click', () => setData(nEl.value));
-  nEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') setData(nEl.value);
-  });
-
-  // Actions
-  document.getElementById('resetZoom').addEventListener('click', () => overlay.call(zoom.transform, d3.zoomIdentity));
-  document.getElementById('exportPng').addEventListener('click', () => {
-    const a = document.createElement('a');
-    a.download = `chart-${Date.now()}.png`;
-    a.href = canvas.toDataURL('image/png'); // только канвас (оси — SVG) для простоты
-    a.click();
-  });
-
-  // Хоткеи
-  window.addEventListener('keydown', (e) => {
-    // не мешаем набору в инпутах
-    const tag = (e.target && e.target.tagName) || '';
-    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) return;
-    if (e.key === 'r' || e.key === 'R') {
-      regenBtn.click();
-    } else if (e.key === '0') {
-      overlay.call(zoom.transform, d3.zoomIdentity);
-    } else if (e.key === 'd' || e.key === 'D') {
-      const v = !useDS.checked;
-      useDS.checked = v;
-      useDS.dispatchEvent(new Event('change'));
-    } else if (e.key === 'i' || e.key === 'I') {
-      const v = !useInterp.checked;
-      useInterp.checked = v;
-      useInterp.dispatchEvent(new Event('change'));
+    const lw = document.getElementById('lineWidth');
+    const lwLabel = document.getElementById('lineWidthLabel');
+    const lc = document.getElementById('lineColor');
+    lw.addEventListener('input', () => {
+      lineWidth = parseFloat(lw.value) || 1;
+      lwLabel.textContent = lineWidth.toFixed(1);
       updateLegendText();
-    } else if (e.key === 'a' || e.key === 'A') {
-      autoY.checked = !autoY.checked;
       scheduleRender();
-    } else if (e.key === '+') {
-      const v = Math.min(parseInt(dsRate.max, 10), (parseInt(dsRate.value, 10) || 1) + 1);
-      dsRate.value = String(v);
-      dsRate.dispatchEvent(new Event('input'));
-    } else if (e.key === '-') {
-      const v = Math.max(parseInt(dsRate.min, 10), (parseInt(dsRate.value, 10) || 1) - 1);
-      dsRate.value = String(v);
-      dsRate.dispatchEvent(new Event('input'));
-    }
-  });
+    });
+    lc.addEventListener('input', () => {
+      lineColor = lc.value || '#2474ff';
+      updateLegendText();
+      scheduleRender();
+    });
 
-  // Старт
-  buildParamsUI();
-  setData(nInput.value);
-  drawAxes();
-  render();
+    function updateLegendText() {
+      const isTable = seriesSelect.value === 'table';
+      const dsText = isTable ? 'н/д' : (useDS.checked ? `on (${dsRate.value}px/бин)` : 'off');
+      dsEl.text(dsText);
+      let interpText = 'linear';
+      if (useInterp.checked) {
+        const sel = curveSelect.value;
+        if (sel === 'catmullRom') interpText = `Catmull–Rom α=${fmt2(alphaSlider.value)}`;
+        else if (sel === 'cardinal') interpText = `Cardinal τ=${fmt2(tensionSlider.value)}`;
+        else if (sel === 'bundle') interpText = `Bundle β=${fmt2(betaSlider.value)}`;
+        else interpText = sel;
+      } else interpText = 'off';
+      interpEl.text(interpText);
+
+      if (isTable) {
+        seriesEl.text(`таблица (${tableSeries.length} сер.)`);
+        swatchEl.style('display', 'none');
+        lineEl.text(`${lineWidth.toFixed(1)}px · многосер.`);
+      } else {
+        const def = DATASETS[seriesSelect.value];
+        seriesEl.text(def.label);
+        swatchEl.style('display', '');
+        swatchEl.style('background', lineColor);
+        lineEl.text(`${lineColor} · ${lineWidth.toFixed(1)}px`);
+      }
+    }
+
+    // ===== Hover ruler + intersections + tooltip + SNAP =====
+    const cursorG = svg.append('g').attr('class', 'cursor hidden').attr('pointer-events', 'none');
+    const cursorLine = cursorG.append('line').attr('y1', MARGIN.top).attr('y2', height - MARGIN.bottom).attr('stroke', 'currentColor').attr('stroke-width', 1).attr('opacity', 0.85);
+    const cursorDotsG = cursorG.append('g').attr('class', 'cursor-dots');
+    const tooltip = chart.append('div').attr('class', 'cursor-tooltip hidden');
+
+    function hideCursor() {
+      cursorG.classed('hidden', true);
+      tooltip.classed('hidden', true);
+    }
+
+    function showCursor() {
+      cursorG.classed('hidden', false);
+      tooltip.classed('hidden', false);
+    }
+
+    function fmtNum(v) {
+      return Number(v).toLocaleString('en-US', { maximumSignificantDigits: 6 });
+    }
+
+    // ====== HOVER-FIX: build polyline from the SAME curve to evaluate y(x)
+    function makeRecorder(out, tol = 0.35) {
+      let penX = 0, penY = 0;
+
+      function dist2ToSeg(x0, y0, x1, y1, px, py) {
+        const dx = x1 - x0, dy = y1 - y0;
+        if (dx === 0 && dy === 0) {
+          const rx = px - x0, ry = py - y0;
+          return rx * rx + ry * ry;
+        }
+        const t = ((px - x0) * dx + (py - y0) * dy) / (dx * dx + dy * dy);
+        const projx = x0 + t * dx, projy = y0 + t * dy;
+        const rx = px - projx, ry = py - projy;
+        return rx * rx + ry * ry;
+      }
+
+      function flattenCubic(x0, y0, x1, y1, x2, y2, x3, y3, tol2, depth) {
+        const d1 = dist2ToSeg(x0, y0, x3, y3, x1, y1);
+        const d2 = dist2ToSeg(x0, y0, x3, y3, x2, y2);
+        if ((d1 <= tol2 && d2 <= tol2) || depth > 10) {
+          out.push({ x: x3, y: y3 });
+          return;
+        }
+        const x01 = (x0 + x1) / 2, y01 = (y0 + y1) / 2;
+        const x12 = (x1 + x2) / 2, y12 = (y1 + y2) / 2;
+        const x23 = (x2 + x3) / 2, y23 = (y2 + y3) / 2;
+        const x012 = (x01 + x12) / 2, y012 = (y01 + y12) / 2;
+        const x123 = (x12 + x23) / 2, y123 = (y12 + y23) / 2;
+        const x0123 = (x012 + x123) / 2, y0123 = (y012 + y123) / 2;
+        flattenCubic(x0, y0, x01, y01, x012, y012, x0123, y0123, tol2, depth + 1);
+        flattenCubic(x0123, y0123, x123, y123, x23, y23, x3, y3, tol2, depth + 1);
+      }
+
+      function flattenQuad(x0, y0, cx, cy, x1, y1, tol2, depth) {
+        // convert quad -> cubic and reuse
+        const c1x = x0 + (2 / 3) * (cx - x0);
+        const c1y = y0 + (2 / 3) * (cy - y0);
+        const c2x = x1 + (2 / 3) * (cx - x1);
+        const c2y = y1 + (2 / 3) * (cy - y1);
+        flattenCubic(x0, y0, c1x, c1y, c2x, c2y, x1, y1, tol2, depth);
+      }
+
+      const tol2 = tol * tol;
+      return {
+        beginPath() {
+        },
+        closePath() {
+        },
+        save() {
+        }, restore() {
+        },
+        arc() {
+        }, // not used by d3.line
+        moveTo(x, y) {
+          penX = x;
+          penY = y;
+          out.push({ x, y });
+        },
+        lineTo(x, y) {
+          penX = x;
+          penY = y;
+          out.push({ x, y });
+        },
+        bezierCurveTo(x1, y1, x2, y2, x3, y3) {
+          flattenCubic(penX, penY, x1, y1, x2, y2, x3, y3, tol2, 0);
+          penX = x3;
+          penY = y3;
+        },
+        quadraticCurveTo(cx, cy, x1, y1) {
+          flattenQuad(penX, penY, cx, cy, x1, y1, tol2, 0);
+          penX = x1;
+          penY = y1;
+        }
+      };
+    }
+
+    function buildPolyline(points) {
+      if (!points || !points.length) return null;
+      const poly = [];
+      const rec = makeRecorder(poly, 0.35);
+      // temporarily switch context to recorder to generate the SAME curve in pixels
+      lineGen.context(rec);
+      lineGen(points);
+      // restore real context
+      lineGen.context(ctx);
+      return poly;
+    }
+
+    function yAtXFromPolyline(poly, xPx) {
+      if (!poly || poly.length < 2) return null;
+      let bestY = null, bestDev = Infinity;
+      for (let i = 0; i < poly.length - 1; i++) {
+        const a = poly[i], b = poly[i + 1];
+        if ((a.x <= xPx && b.x >= xPx) || (a.x >= xPx && b.x <= xPx)) {
+          const dx = b.x - a.x;
+          const t = dx !== 0 ? (xPx - a.x) / dx : 0;
+          const yv = a.y + t * (b.y - a.y);
+          const dev = Math.abs(b.x - a.x);
+          if (dev < bestDev) {
+            bestDev = dev;
+            bestY = yv;
+          }
+        }
+      }
+      return bestY;
+    }
+
+    function getIntersectionsAtX(xv) {
+      const res = [];
+      const isTable = seriesSelect.value === 'table';
+      const mx = x(xv);
+      if (isTable) {
+        for (const s of tableSeries) {
+          const poly = s._poly;
+          if (!poly) continue;
+          const yPix = yAtXFromPolyline(poly, mx);
+          if (Number.isFinite(yPix)) {
+            res.push({ name: s.name, color: s.color, x: xv, y: y.invert(yPix) });
+          }
+        }
+      } else {
+        if (renderPolyline) {
+          const yPix = yAtXFromPolyline(renderPolyline, mx);
+          if (Number.isFinite(yPix)) {
+            const def = DATASETS[seriesSelect.value];
+            res.push({ name: def.label, color: lineColor, x: xv, y: y.invert(yPix) });
+          }
+        }
+      }
+      return res;
+    }
+
+    function updateTooltip(mx, my, xv, intersections, snapped) {
+      if (!intersections.length) {
+        tooltip.classed('hidden', true);
+        return;
+      }
+      const rows = intersections.map(s => `<div class=\"legend-row\"><span class=\"swatch\" style=\"background:${s.color}\"></span><span><b>${s.name}</b>: ${fmtNum(s.y)}</span></div>`).join('');
+      const snapBadge = snapped ? ' <span class="muted">(snap)</span>' : '';
+      tooltip.html(`<div class="title">x = ${fmtNum(xv)}${snapBadge}</div>${rows}`);
+      const node = tooltip.node();
+      const tw = node.offsetWidth || 160;
+      const th = node.offsetHeight || 60;
+      const margin = 10;
+      let left = mx + 12;
+      if (left + tw > width - margin) left = mx - tw - 12;
+      left = clamp(left, MARGIN.left, width - tw - margin);
+      let top = my - th / 2;
+      top = clamp(top, MARGIN.top, height - MARGIN.bottom - th);
+      tooltip.style('left', `${left}px`).style('top', `${top}px`);
+    }
+
+    // === SNAP helpers ===
+    function nearestInSorted(arr, v) {
+      const n = arr.length;
+      if (!n) return v;
+      if (v <= arr[0]) return arr[0];
+      if (v >= arr[n - 1]) return arr[n - 1];
+      let lo = 0, hi = n - 1;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (arr[mid] <= v) lo = mid; else hi = mid;
+      }
+      return (v - arr[lo] <= arr[hi] - v) ? arr[lo] : arr[hi];
+    }
+
+    let isShift = false;
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Shift') {
+        isShift = true;
+      }
+    });
+    window.addEventListener('keyup', (e) => {
+      if (e.key === 'Shift') {
+        isShift = false;
+      }
+    });
+
+    function onMouseMove(ev) {
+      const [mxRaw, my] = d3.pointer(ev, svg.node());
+      if (mxRaw < MARGIN.left || mxRaw > width - MARGIN.right || my < MARGIN.top || my > height - MARGIN.bottom) {
+        hideCursor();
+        return;
+      }
+
+      const xvRaw = x.invert(mxRaw);
+      const isTable = seriesSelect.value === 'table';
+      const snapped = !!alwaysSnapEl.checked || isShift;
+      let xv = xvRaw;
+      if (snapped) {
+        if (isTable) xv = nearestInSorted(tableAllX, xvRaw);
+        else xv = Math.round(clamp(xvRaw, 0, Math.max(0, N - 1)));
+      }
+
+      const mx = x(xv);
+      const intersections = getIntersectionsAtX(xv);
+
+      cursorG.classed('snapped', snapped);
+      cursorLine.attr('x1', mx).attr('x2', mx);
+
+      const dots = cursorDotsG.selectAll('circle').data(intersections);
+      dots.join(
+        enter => enter.append('circle').attr('r', 3).attr('fill', '#fff').attr('stroke-width', 2),
+        update => update,
+        exit => exit.remove()
+      ).attr('cx', d => x(d.x)).attr('cy', d => y(d.y)).attr('stroke', d => d.color).attr('r', snapped ? 4 : 3);
+
+      updateTooltip(mx, my, xv, intersections, snapped);
+      showCursor();
+    }
+
+    // ====== Zoom with dynamic limits + snap-to-point at extreme zoom
+    const zoom = d3.zoom()
+      .scaleExtent([1, 10_000]) // will be updated dynamically
+      .translateExtent([[MARGIN.left, MARGIN.top], [width - MARGIN.right, height - MARGIN.bottom]])
+      .on('start', () => hideCursor())
+      .on('zoom', (ev) => {
+        const t = ev.transform;
+        const zx = t.rescaleX(x0);
+        x.domain(zx.domain());
+        scheduleRender();
+      });
+
+    // Reentrancy guard for snap-on-end
+    let _snapBusy = false;
+    const overlay = svg.append('rect')
+      .attr('x', MARGIN.left)
+      .attr('y', MARGIN.top)
+      .attr('width', width - MARGIN.left - MARGIN.right)
+      .attr('height', height - MARGIN.top - MARGIN.bottom)
+      .classed('zoom-overlay', true)
+      .style('fill', 'transparent')
+      .style('cursor', 'grab')
+      .call(zoom)
+      .on('mousemove', onMouseMove)
+      .on('mouseleave', hideCursor);
+
+    zoom.on('end', (ev) => {
+      // Ignore programmatic transforms to avoid recursive calls
+      if (!ev || !ev.sourceEvent) return;
+      if (_snapBusy) return;
+      const isTable = seriesSelect.value === 'table';
+      const zx = ev.transform.rescaleX(x0);
+      const [xs, xe] = zx.domain();
+      const w = Math.max(1e-9, xe - xs);
+      const minDx = currentMinDx();
+      if (w <= 2 * minDx) {
+        const cx = (xs + xe) / 2;
+        const target = isTable ? nearestInSorted(tableAllX, cx) : Math.round(cx);
+        const cur = (x.domain()[0] + x.domain()[1]) / 2;
+        if (Number.isFinite(target) && Math.abs(cur - target) > (minDx * 1e-6)) {
+          _snapBusy = true;
+          // Defer to next frame to avoid nested dispatch inside current handler
+          requestAnimationFrame(() => {
+            try {
+              overlay.call(zoom.translateTo, target, 0);
+            } finally {
+              _snapBusy = false;
+            }
+          });
+        }
+      }
+    });
+
+    function tableSetUIVisible(v) {
+      tableBar.classList.toggle('hidden', !v);
+      tableWrap.classList.toggle('hidden', !v);
+      nWrap.classList.toggle('hidden', v);
+      regenBtn.classList.toggle('hidden', v);
+      seriesParamsEl.classList.toggle('hidden', v);
+      useDS.disabled = v;
+      dsRate.disabled = v || !useDS.checked;
+      lineColorWrap.classList.toggle('hidden', v);
+    }
+
+    function initTableOnce() {
+      if (tableInitialized) return;
+      tableInitialized = true;
+      theadRow.innerHTML = '';
+      const thX = document.createElement('th');
+      thX.textContent = 'x';
+      theadRow.appendChild(thX);
+      const thY1 = document.createElement('th');
+      thY1.textContent = 'y1';
+      theadRow.appendChild(thY1);
+      for (let r = 0; r < 5; r++) addRow();
+      rebuildTableSeries();
+    }
+
+    function addCol() {
+      const idx = theadRow.children.length;
+      const th = document.createElement('th');
+      th.textContent = `y${idx}`;
+      theadRow.appendChild(th);
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.forEach(tr => {
+        const td = document.createElement('td');
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.inputMode = 'decimal';
+        inp.addEventListener('input', handleInputChange);
+        td.appendChild(inp);
+        tr.appendChild(td);
+      });
+      rebuildTableSeries();
+      scheduleRender();
+      updateLegendText();
+      buildSeriesLegend();
+    }
+
+    function addRow() {
+      const tr = document.createElement('tr');
+      const cols = Math.max(2, theadRow.children.length);
+      for (let c = 0; c < cols; c++) {
+        const td = document.createElement('td');
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.inputMode = 'decimal';
+        inp.addEventListener('input', handleInputChange);
+        td.appendChild(inp);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+
+    function parseNum(s) {
+      const v = parseFloat((s || '').toString().trim().replace(',', '.'));
+      return Number.isFinite(v) ? v : NaN;
+    }
+
+    function readTableMatrix() {
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      const cols = theadRow.children.length;
+      return rows.map(tr => Array.from(tr.querySelectorAll('td > input')).slice(0, cols).map(inp => inp.value));
+    }
+
+    function rebuildTableSeries() {
+      const cols = Math.max(2, theadRow.children.length);
+      const M = readTableMatrix();
+      const series = [];
+      for (let c = 1; c < cols; c++) {
+        const name = theadRow.children[c].textContent || `y${c}`;
+        const color = palette[(c - 1) % palette.length];
+        const pts = [];
+        for (let r = 0; r < M.length; r++) {
+          const xv = parseNum(M[r][0]);
+          const yv = parseNum(M[r][c]);
+          if (Number.isFinite(xv) && Number.isFinite(yv)) pts.push({ x: xv, y: yv });
+        }
+        if (pts.length) series.push({ name, color, points: pts.sort((a, b) => a.x - b.x) });
+      }
+      tableSeries = series;
+      const xSet = new Set();
+      tableSeries.forEach(s => s.points.forEach(p => xSet.add(p.x)));
+      tableAllX = Array.from(xSet).sort((a, b) => a - b);
+
+      if (tableSeries.length) {
+        const xs = [];
+        const ys = [];
+        tableSeries.forEach(s => {
+          s.points.forEach(p => {
+            xs.push(p.x);
+            ys.push(p.y);
+          });
+        });
+        const xmn = Math.min(...xs), xmx = Math.max(...xs);
+        const ymn = Math.min(...ys), ymx = Math.max(...ys);
+        if (Number.isFinite(xmn) && Number.isFinite(xmx)) {
+          x.domain([xmn, xmx]);
+          x0.domain(x.domain());
+        }
+        if (Number.isFinite(ymn) && Number.isFinite(ymx)) {
+          y.domain([ymn, ymx]).nice();
+          y0.domain(y.domain());
+        }
+        const total = tableSeries.reduce((s, t) => s + t.points.length, 0);
+        countEl.text(total.toLocaleString('en-US'));
+      }
+      // recalc minDx for table
+      tableMinDx = computeTableMinDx();
+      updateZoomLimits();
+      buildSeriesLegend();
+    }
+
+    function buildSeriesLegend() {
+      seriesLegend.innerHTML = '';
+      tableSeries.forEach(s => {
+        const sw = document.createElement('div');
+        sw.className = 'swatch';
+        sw.style.background = s.color;
+        const name = document.createElement('div');
+        name.textContent = s.name;
+        seriesLegend.appendChild(sw);
+        seriesLegend.appendChild(name);
+      });
+    }
+
+    function handleInputChange() {
+      rebuildTableSeries();
+      scheduleRender();
+      updateLegendText();
+    }
+
+    tableWrap.addEventListener('paste', (e) => {
+      const txt = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+      if (!txt) return;
+      e.preventDefault();
+      const rows = txt.replace(/\r/g, '').split('\n').filter(Boolean).map(line => line.split('\t'));
+      if (!rows.length) return;
+      const needRows = rows.length;
+      const haveRows = tbody.querySelectorAll('tr').length;
+      for (let r = haveRows; r < needRows; r++) addRow();
+      const needCols = Math.max(2, rows[0].length);
+      while (theadRow.children.length < needCols) addCol();
+      const bodyRows = Array.from(tbody.querySelectorAll('tr'));
+      for (let r = 0; r < rows.length; r++) {
+        const tr = bodyRows[r];
+        const cells = Array.from(tr.querySelectorAll('td > input'));
+        for (let c = 0; c < rows[r].length; c++) {
+          if (cells[c]) cells[c].value = rows[r][c];
+        }
+      }
+      rebuildTableSeries();
+      scheduleRender();
+      updateLegendText();
+    });
+
+    document.getElementById('addCol').addEventListener('click', () => addCol());
+    document.getElementById('addRow').addEventListener('click', () => {
+      addRow();
+      scheduleRender();
+    });
+
+    function setData(n) {
+      hideCursor();
+      if (seriesSelect.value === 'table') {
+        rebuildTableSeries();
+        drawAxes();
+        scheduleRender();
+        updateLegendText();
+        return;
+      }
+      N = clamp(parseInt(n, 10) || 0, +nInput.min, MAX_POINTS);
+      nInput.value = String(N);
+      const def = DATASETS[seriesSelect.value];
+      const params = readParams();
+      const newY = def.gen(N, params);
+      Y = newY;
+      countEl.text(N.toLocaleString('en-US'));
+      x.domain([0, Math.max(1, N - 1)]);
+      x0.domain(x.domain());
+      y.domain(extentFloat32(Y)).nice();
+      y0.domain(y.domain());
+      overlay.call(zoom.transform, d3.zoomIdentity);
+      updateZoomLimits();
+      drawAxes();
+      scheduleRender();
+      updateLegendText();
+    }
+
+    function onSeriesChange() {
+      hideCursor();
+      buildParamsUI();
+      const isTable = seriesSelect.value === 'table';
+      tableSetUIVisible(isTable);
+      if (isTable) {
+        initTableOnce();
+        setData(0);
+      } else {
+        setData(nInput.value);
+      }
+    }
+
+    seriesSelect.addEventListener('change', onSeriesChange);
+    const nEl = document.getElementById('nInput');
+    regenBtn.addEventListener('click', () => setData(nEl.value));
+    nEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') setData(nEl.value);
+    });
+
+    document.getElementById('resetZoom').addEventListener('click', () => {
+      overlay.call(zoom.transform, d3.zoomIdentity);
+      hideCursor();
+    });
+    document.getElementById('exportPng').addEventListener('click', () => {
+      const a = document.createElement('a');
+      a.download = `chart-${Date.now()}.png`;
+      a.href = canvas.toDataURL('image/png');
+      a.click();
+    });
+
+    window.addEventListener('keydown', (e) => {
+      const tag = (e.target && e.target.tagName) || '';
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) return;
+      if (e.key === 'r' || e.key === 'R') {
+        regenBtn.click();
+      } else if (e.key === '0') {
+        overlay.call(zoom.transform, d3.zoomIdentity);
+        hideCursor();
+      } else if (e.key === 'd' || e.key === 'D') {
+        if (seriesSelect.value !== 'table') {
+          const v = !useDS.checked;
+          useDS.checked = v;
+          useDS.dispatchEvent(new Event('change'));
+        }
+      } else if (e.key === 'i' || e.key === 'I') {
+        const v = !useInterp.checked;
+        useInterp.checked = v;
+        useInterp.dispatchEvent(new Event('change'));
+        updateLegendText();
+      } else if (e.key === '+') {
+        if (seriesSelect.value !== 'table') {
+          const v = Math.min(parseInt(dsRate.max, 10), (parseInt(dsRate.value, 10) || 1) + 1);
+          dsRate.value = String(v);
+          dsRate.dispatchEvent(new Event('input'));
+        }
+      } else if (e.key === '-') {
+        if (seriesSelect.value !== 'table') {
+          const v = Math.max(parseInt(dsRate.min, 10), (parseInt(dsRate.value, 10) || 1) - 1);
+          dsRate.value = String(v);
+          dsRate.dispatchEvent(new Event('input'));
+        }
+      } else if (e.key === 's' || e.key === 'S') {
+        alwaysSnapEl.checked = !alwaysSnapEl.checked;
+      } else if (e.key === 't' || e.key === 'T') {
+        runTests();
+      }
+    });
+
+    // ==== helpers for visible points (table) with neighbors so lines cut at axes
+    const bisectX = d3.bisector(d => d.x).left;
+
+    function visibleWithNeighbors(points, xStart, xEnd) {
+      const n = points.length;
+      if (!n) return [];
+      // indices inside domain
+      let first = -1, last = -1;
+      for (let i = 0; i < n; i++) {
+        const v = points[i].x;
+        if (v >= xStart && v <= xEnd) {
+          if (first === -1) first = i;
+          last = i;
+        }
+      }
+      if (first === -1) {
+        // ничего внутри — берем ближайшие два вокруг xStart
+        const idx = Math.max(0, Math.min(n, bisectX(points, xStart)));
+        const left = Math.max(0, idx - 1);
+        const right = Math.min(n - 1, idx);
+        if (left === right) {
+          return [points[left]];
+        }
+        return [points[left], points[right]];
+      }
+      const start = Math.max(0, first - 1);
+      const end = Math.min(n - 1, last + 1);
+      return points.slice(start, end + 1);
+    }
+
+    function computeTableMinDx() {
+      let mdx = Infinity;
+      for (const s of tableSeries) {
+        const pts = s.points;
+        for (let i = 1; i < pts.length; i++) {
+          const dx = pts[i].x - pts[i - 1].x;
+          if (dx > 0 && dx < mdx) mdx = dx;
+        }
+      }
+      if (!Number.isFinite(mdx) || mdx <= 0) mdx = 1; // fallback
+      return mdx;
+    }
+
+    function currentMinDx() {
+      return (seriesSelect.value === 'table') ? tableMinDx : 1;
+    }
+
+    function updateZoomLimits() {
+      const full = x0.domain()[1] - x0.domain()[0];
+      const minWin = Math.max(currentMinDx() * 2, 1e-6); // минимум = две соседние точки
+      const maxK = Math.max(1, full / minWin);
+      zoom.scaleExtent([1, maxK]);
+    }
+
+    function render() {
+      clearCanvas();
+      const isTable = seriesSelect.value === 'table';
+
+      if (isTable) {
+        const [xStart, xEnd] = x.domain();
+        let visiblePointsAll = 0;
+        let yVis = [];
+        tableSeries.forEach(s => {
+          const pts = visibleWithNeighbors(s.points, xStart, xEnd);
+          s._visiblePoints = pts;
+          visiblePointsAll += pts.length;
+          yVis.push(...pts);
+        });
+        // Y-фрейм фиксирован (отказ от авто-масштаба)
+        y.domain(y0.domain());
+        drawAxes();
+        visibleEl.text(visiblePointsAll.toLocaleString('en-US'));
+        const z = (x0.domain()[1] - x0.domain()[0]) / Math.max(1e-9, (x.domain()[1] - x.domain()[0]));
+        zoomEl.text(`${z.toFixed(2)}×`);
+        tableSeries.forEach(s => {
+          drawLine(s._visiblePoints || [], s.color);
+          s._poly = buildPolyline(s._visiblePoints || []);
+        });
+        return;
+      }
+
+      let points = [];
+      const [i0, i1] = visibleIndexRange();
+      if (useDS.checked) points = decimateMinMaxPerPixelY(Y, x, Math.max(1, parseInt(dsRate.value, 10) || 1), i0, i1);
+      else {
+        const len = Math.max(0, i1 - i0 + 1);
+        points = new Array(len);
+        for (let i = 0; i < len; i++) {
+          const ii = i0 + i;
+          points[i] = { x: ii, y: Y[ii] };
+        }
+        if (points.length === 1) { // добавим соседа, чтобы не пропадала линия
+          if (i1 + 1 < Y.length) points.push({ x: i1 + 1, y: Y[i1 + 1] });
+          else if (i0 - 1 >= 0) points.unshift({ x: i0 - 1, y: Y[i0 - 1] });
+        }
+      }
+      // фиксированный Y (без авто-рескейла)
+      y.domain(y0.domain());
+      drawAxes();
+      visibleEl.text(points.length.toLocaleString('en-US'));
+      const z = (x0.domain()[1] - x0.domain()[0]) / Math.max(1e-9, (x.domain()[1] - x.domain()[0]));
+      zoomEl.text(`${z.toFixed(2)}×`);
+      drawLine(points);
+      renderPoints = points;
+      renderPolyline = buildPolyline(points);
+    }
+
+    // ===== Basic tests
+    const testBadge = document.getElementById('testBadge');
+
+    function showTestBadge(text) {
+      if (!testBadge) return;
+      testBadge.textContent = text;
+      testBadge.style.display = 'block';
+      setTimeout(() => {
+        testBadge.style.display = 'none';
+      }, 3000);
+    }
+
+    function runTests() {
+      let passed = 0, failed = 0;
+      const results = [];
+
+      function t(name, fn) {
+        try {
+          fn();
+          passed++;
+          results.push(`✅ ${name}`);
+        } catch (e) {
+          failed++;
+          console.error('❌', name, e);
+          results.push(`❌ ${name}: ${e.message}`);
+        }
+      }
+
+      function assert(cond, msg) {
+        if (!cond) throw new Error(msg || 'assertion failed');
+      }
+
+      // DOM presence tests
+      t('table UI nodes exist', () => {
+        assert(document.getElementById('tableBar'), '#tableBar missing');
+        assert(document.getElementById('tableWrap'), '#tableWrap missing');
+        assert(document.getElementById('theadRow'), '#theadRow missing');
+        assert(document.getElementById('tbody'), '#tbody missing');
+        assert(document.getElementById('addCol'), '#addCol missing');
+        assert(document.getElementById('addRow'), '#addRow missing');
+      });
+
+      // nearestInSorted tests
+      t('nearestInSorted basic', () => {
+        const arr = [0, 5, 10, 20];
+        assert(nearestInSorted(arr, -3) === 0, 'below min');
+        assert(nearestInSorted(arr, 22) === 20, 'above max');
+        assert(nearestInSorted(arr, 6) === 5, 'nearest 6→5');
+        assert(nearestInSorted(arr, 12) === 10, 'nearest 12→10');
+        assert(nearestInSorted(arr, 15) === 10 || nearestInSorted(arr, 15) === 20, 'midpoint ok');
+      });
+
+      // buildParamsUI test
+      t('buildParamsUI creates inputs for sine', () => {
+        seriesSelect.value = 'sine';
+        buildParamsUI();
+        const found = Array.from(seriesParamsEl.querySelectorAll('input[type="range"]')).length;
+        assert(found >= 4, 'expected ≥4 params for sine');
+      });
+
+      // table flow should not throw
+      t('switch to table does not throw', () => {
+        seriesSelect.value = 'table';
+        onSeriesChange();
+        assert(Array.isArray(tableAllX), 'tableAllX not array');
+      });
+
+      // === Added tests for edge cases ===
+      t('decimator keeps at least two points at extreme zoom', () => {
+        const yArr = Float32Array.from([0, 1, 0, 1, 0]);
+        const pts = decimateMinMaxPerPixelY(yArr, x, 1, 2, 2);
+        assert(pts.length >= 2, 'expected ≥2 points when i0==i1');
+      });
+
+      t('visibleWithNeighbors returns neighbors when none inside', () => {
+        const pts = [{ x: 0, y: 0 }, { x: 10, y: 1 }, { x: 20, y: 2 }];
+        const vis = visibleWithNeighbors(pts, 11, 19);
+        assert(vis.length === 2 && vis[0].x === 10 && vis[1].x === 20, 'should return [left,right]');
+      });
+
+      t('computeTableMinDx falls back to 1 for invalid/empty', () => {
+        const keep = tableSeries;
+        tableSeries = [{ name: 't', color: '#000', points: [{ x: 5, y: 1 }, { x: 5, y: 2 }] }];
+        const mdx = computeTableMinDx();
+        tableSeries = keep;
+        assert(mdx === 1, 'mdx fallback must be 1');
+      });
+
+      t('repeated programmatic translateTo does not crash', () => {
+        for (let i = 0; i < 10; i++) overlay.call(d3.zoom().transform, d3.zoomIdentity); // noop transforms
+        for (let i = 0; i < 10; i++) overlay.call(zoom.translateTo, 0, 0);
+        assert(true, 'no crash');
+      });
+
+      console.table(results.reduce((acc, line, i) => {
+        acc[i + 1] = { result: line };
+        return acc;
+      }, {}));
+      const summary = `Тесты: ${passed} пройдено, ${failed} ошибок`;
+      showTestBadge(summary);
+      return { passed, failed };
+    }
+
+    runTestsBtn?.addEventListener('click', runTests);
+
+    // Initial draw
+    buildParamsUI();
+    setData(document.getElementById('nInput').value);
+    drawAxes();
+    render();
+  }
 </script>
